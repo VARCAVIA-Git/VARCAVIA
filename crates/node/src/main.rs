@@ -133,6 +133,7 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
     let server_config = varcavia_uag::server::ServerConfig {
         bind_addr: format!("127.0.0.1:{api_port}").parse()?,
         cors_origins: vec!["http://localhost:5173".into()],
+        rate_limit_per_sec: 100,
     };
 
     tracing::info!("Nodo VARCAVIA avviato.");
@@ -149,14 +150,26 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
         }
     });
 
-    // Aspetta Ctrl+C
+    // Aspetta Ctrl+C, poi graceful shutdown con timeout 5s
     tokio::signal::ctrl_c().await?;
-    tracing::info!("Shutdown in corso...");
+    tracing::info!("Shutdown in corso (max 5s)...");
+
+    // Abort del server HTTP
     server_handle.abort();
 
-    // Flush storage
-    if let Err(e) = state.db.flush() {
-        tracing::warn!("Errore flush storage: {}", e);
+    // Flush storage con timeout
+    let flush_state = state.clone();
+    let flush_result = tokio::time::timeout(
+        tokio::time::Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || flush_state.db.flush()),
+    )
+    .await;
+
+    match flush_result {
+        Ok(Ok(Ok(_))) => tracing::info!("Storage flushed."),
+        Ok(Ok(Err(e))) => tracing::warn!("Errore flush storage: {}", e),
+        Ok(Err(e)) => tracing::warn!("Errore flush task: {}", e),
+        Err(_) => tracing::warn!("Flush timeout (5s) — dati recenti potrebbero essere persi"),
     }
 
     tracing::info!("Nodo terminato.");
