@@ -8,6 +8,7 @@
 pub mod state;
 pub mod server;
 pub mod rest;
+pub mod consensus;
 pub mod graphql;
 pub mod translator;
 pub mod middleware;

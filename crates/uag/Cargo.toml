@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 varcavia-ddna = { path = "../ddna" }
+varcavia-vtp = { path = "../vtp" }
 varcavia-cde = { path = "../cde" }
 varcavia-arc = { path = "../arc" }
 axum.workspace = true

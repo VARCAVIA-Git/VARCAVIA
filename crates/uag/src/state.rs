@@ -1,7 +1,9 @@
 //! Stato condiviso dell'applicazione — passato a tutti gli handler Axum.
 
+use std::net::SocketAddr;
 use std::sync::Mutex;
 use std::time::Instant;
+use tokio::sync::RwLock;
 use varcavia_cde::pipeline::{Pipeline, PipelineConfig};
 use varcavia_ddna::identity::KeyPair;
 
@@ -22,6 +24,8 @@ pub struct AppState {
     pub node_id: String,
     /// Timestamp di avvio del nodo
     pub started_at: Instant,
+    /// Indirizzi P2P dei peer noti
+    pub peer_addrs: RwLock<Vec<SocketAddr>>,
 }
 
 impl AppState {
@@ -35,6 +39,7 @@ impl AppState {
             node_secret,
             node_id,
             started_at: Instant::now(),
+            peer_addrs: RwLock::new(Vec::new()),
         }
     }
 
@@ -59,6 +64,19 @@ impl AppState {
         key.extend_from_slice(prefix);
         key.extend_from_slice(id.as_bytes());
         key
+    }
+
+    /// Aggiunge un peer address.
+    pub async fn add_peer(&self, addr: SocketAddr) {
+        let mut peers = self.peer_addrs.write().await;
+        if !peers.contains(&addr) {
+            peers.push(addr);
+        }
+    }
+
+    /// Restituisce la lista peer corrente.
+    pub async fn get_peers(&self) -> Vec<SocketAddr> {
+        self.peer_addrs.read().await.clone()
     }
 }
 
@@ -97,5 +115,24 @@ mod tests {
     fn test_uptime() {
         let state = temp_state();
         assert!(state.uptime_secs() < 2);
+    }
+
+    #[tokio::test]
+    async fn test_add_peer() {
+        let state = temp_state();
+        let addr: SocketAddr = "127.0.0.1:8181".parse().unwrap();
+        state.add_peer(addr).await;
+        let peers = state.get_peers().await;
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0], addr);
+    }
+
+    #[tokio::test]
+    async fn test_add_peer_dedup() {
+        let state = temp_state();
+        let addr: SocketAddr = "127.0.0.1:8181".parse().unwrap();
+        state.add_peer(addr).await;
+        state.add_peer(addr).await;
+        assert_eq!(state.get_peers().await.len(), 1);
     }
 }

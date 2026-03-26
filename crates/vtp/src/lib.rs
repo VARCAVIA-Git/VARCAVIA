@@ -16,6 +16,7 @@ pub mod routing;
 pub mod compression;
 pub mod channel;
 pub mod sync;
+pub mod messages;
 
 use thiserror::Error;
 

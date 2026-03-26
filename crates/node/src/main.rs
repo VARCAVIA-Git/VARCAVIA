@@ -27,13 +27,17 @@ struct Args {
     #[arg(short, long, default_value = "~/varcavia-data")]
     data_dir: String,
 
-    /// Porta di ascolto (override config)
+    /// Porta di ascolto API (default: 8080)
     #[arg(short, long)]
     port: Option<u16>,
 
     /// Livello di log (trace, debug, info, warn, error)
     #[arg(short, long, default_value = "info")]
     log_level: String,
+
+    /// Lista di peer P2P da contattare all'avvio (es. 127.0.0.1:8181,127.0.0.1:8182)
+    #[arg(long, value_delimiter = ',')]
+    peers: Vec<String>,
 
     #[command(subcommand)]
     command: Option<cli::Commands>,
@@ -93,7 +97,7 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
         kp
     };
     let node_id = hex::encode(keypair.public_key_bytes());
-    tracing::info!("Node ID: {}", node_id);
+    tracing::info!("Node ID: {}...{}", &node_id[..8], &node_id[56..]);
 
     // 3. Crea la pipeline CDE
     let pipeline_config = PipelineConfig::default();
@@ -105,10 +109,27 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
     let api_port = args.port.unwrap_or(8080);
     let net_port = api_port + 100; // P2P su porta API + 100
     let net_addr = format!("127.0.0.1:{net_port}").parse()?;
-    let network = network::NetworkManager::new(node_id, net_addr);
-    network.start_listener().await?;
+    let network_mgr = network::NetworkManager::new(
+        node_id,
+        net_addr,
+        state.clone(),
+    );
+    network_mgr.start_listener().await?;
 
-    // 6. Avvia il server UAG (Axum)
+    // 6. Connetti ai bootstrap peers
+    if !args.peers.is_empty() {
+        let peer_addrs: Vec<std::net::SocketAddr> = args
+            .peers
+            .iter()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        tracing::info!("Connessione a {} bootstrap peers...", peer_addrs.len());
+        network_mgr.connect_to_peers(&peer_addrs).await;
+        let connected = state.get_peers().await.len();
+        tracing::info!("Connesso a {} peer", connected);
+    }
+
+    // 7. Avvia il server UAG (Axum)
     let server_config = varcavia_uag::server::ServerConfig {
         bind_addr: format!("127.0.0.1:{api_port}").parse()?,
         cors_origins: vec!["http://localhost:5173".into()],

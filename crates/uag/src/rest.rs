@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post, delete},
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -154,16 +154,17 @@ pub fn translate_routes() -> Router<Arc<AppState>> {
 // === Handlers ===
 
 /// POST /api/v1/data — Inserisci un nuovo dato.
-/// Crea dDNA → pipeline CDE → salva in sled.
+/// Crea dDNA → pipeline CDE → salva in sled → consenso con peer.
 async fn insert_data(
     State(state): State<Arc<AppState>>,
     Json(req): Json<InsertDataRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let content = req.content.as_bytes();
+    let content_bytes = req.content.into_bytes();
+    let domain = req.domain;
     let keypair = state.keypair();
 
     // 1. Crea dDNA
-    let ddna = match varcavia_ddna::DataDna::create(content, &keypair) {
+    let ddna = match varcavia_ddna::DataDna::create(&content_bytes, &keypair) {
         Ok(d) => d,
         Err(e) => {
             return (
@@ -178,7 +179,7 @@ async fn insert_data(
     // 2. Pipeline CDE
     let score = {
         let mut pipeline = state.pipeline.lock().unwrap();
-        match pipeline.process(content, &ddna, &req.domain) {
+        match pipeline.process(&content_bytes, &ddna, &domain) {
             Ok(result) => result.score.overall,
             Err(e) => {
                 return (
@@ -206,18 +207,18 @@ async fn insert_data(
     let info_key = AppState::make_key(PREFIX_INFO, &data_id);
 
     let info = DataInfo {
-        domain: req.domain,
+        domain: domain.clone(),
         score,
         inserted_at_us: chrono::Utc::now().timestamp_micros(),
     };
 
-    if let Err(e) = state.db.insert(data_key, content) {
+    if let Err(e) = state.db.insert(data_key, content_bytes.as_slice()) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Storage data: {e}")})),
         );
     }
-    if let Err(e) = state.db.insert(ddna_key, ddna_bytes) {
+    if let Err(e) = state.db.insert(ddna_key, ddna_bytes.as_slice()) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Storage dDNA: {e}")})),
@@ -228,6 +229,22 @@ async fn insert_data(
     }
 
     tracing::info!("Dato inserito: {} (score: {score:.2})", data_id);
+
+    // 5. Avvia consenso distribuito in background (non blocca la risposta)
+    {
+        let consensus_state = state.clone();
+        let consensus_id = data_id.clone();
+        tokio::spawn(async move {
+            crate::consensus::run_consensus(
+                &consensus_state,
+                &consensus_id,
+                &content_bytes,
+                &ddna_bytes,
+                &domain,
+            )
+            .await;
+        });
+    }
 
     (
         StatusCode::CREATED,
