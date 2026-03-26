@@ -24,7 +24,7 @@ pub struct ConsensusResult {
 }
 
 /// Timeout per la raccolta voti (ms).
-const VOTE_TIMEOUT_MS: u64 = 500;
+const VOTE_TIMEOUT_MS: u64 = 5000;
 
 /// Esegue il consenso distribuito per un dato appena inserito.
 ///

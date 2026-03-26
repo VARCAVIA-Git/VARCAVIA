@@ -1,0 +1,11 @@
+[package]
+name = "varcavia-crawler"
+description = "Web crawler per popolare VARCAVIA con fatti reali da Wikipedia"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio.workspace = true
+tracing.workspace = true

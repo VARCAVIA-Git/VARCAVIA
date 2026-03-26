@@ -64,6 +64,9 @@ async fn main() -> anyhow::Result<()> {
         Some(cli::Commands::Status) => {
             cli::handle_status().await?;
         }
+        Some(cli::Commands::Seed { port }) => {
+            cli::handle_seed(port).await?;
+        }
         None => {
             run_node(args).await?;
         }

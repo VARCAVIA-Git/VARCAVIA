@@ -8,6 +8,7 @@ members = [
     "crates/uag",
     "crates/node",
     "crates/mcp",
+    "crates/crawler",
 ]
 
 [workspace.package]

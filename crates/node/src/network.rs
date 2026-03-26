@@ -60,10 +60,14 @@ impl NetworkManager {
                         let peers = peers.clone();
                         let state = state.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_connection(
-                                &mut stream, addr, &node_id, &peers, &state,
+                            let timeout = tokio::time::Duration::from_secs(5);
+                            match tokio::time::timeout(
+                                timeout,
+                                handle_connection(&mut stream, addr, &node_id, &peers, &state),
                             ).await {
-                                tracing::warn!("Errore connessione {}: {}", addr, e);
+                                Ok(Err(e)) => tracing::warn!("Errore connessione {}: {}", addr, e),
+                                Err(_) => tracing::warn!("Timeout connessione {}", addr),
+                                _ => {}
                             }
                         });
                     }
@@ -81,7 +85,10 @@ impl NetworkManager {
             node_id: self.node_id.clone(),
             listen_port: Some(self.listen_addr.port()),
         };
-        let response = messages::request(addr, &msg).await?;
+        let timeout = tokio::time::Duration::from_secs(5);
+        let response = tokio::time::timeout(timeout, messages::request(addr, &msg))
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout ping a {addr}"))??;
         if let NodeMessage::Pong { node_id } = response {
             self.peers.write().await.insert(
                 node_id.clone(),

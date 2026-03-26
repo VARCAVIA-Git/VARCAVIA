@@ -12,6 +12,12 @@ pub enum Commands {
     },
     /// Mostra lo stato del nodo
     Status,
+    /// Popola il nodo con fatti reali da Wikipedia
+    Seed {
+        /// Porta del nodo API a cui inviare i fatti
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
 }
 
 pub async fn handle_init(data_dir: &str) -> anyhow::Result<()> {
@@ -72,6 +78,80 @@ pub async fn handle_status() -> anyhow::Result<()> {
     println!("  Data dir:   {data_dir}");
     println!("  Data count: {data_count}");
     println!("  Status:     offline (avvia con: cargo run --bin varcavia-node)");
+
+    Ok(())
+}
+
+/// Popola il nodo con fatti reali da Wikipedia.
+pub async fn handle_seed(port: u16) -> anyhow::Result<()> {
+    println!("VARCAVIA Seed — Popolo il nodo con fatti reali...");
+    println!("  Target: http://127.0.0.1:{port}/api/v1/data");
+    println!();
+
+    // Verifica che il nodo sia raggiungibile
+    let base_url = format!("http://127.0.0.1:{port}");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    match client.get(format!("{base_url}/api/v1/node/status")).send().await {
+        Ok(r) if r.status().is_success() => {
+            println!("  Nodo raggiungibile.");
+        }
+        _ => {
+            println!("  ERRORE: nodo non raggiungibile su porta {port}.");
+            println!("  Avvia il nodo prima con: cargo run --bin varcavia-node -- --port {port}");
+            return Ok(());
+        }
+    }
+
+    // Crawla e inserisci
+    let facts = varcavia_crawler::crawl_all().await;
+    let total = facts.len();
+    let mut inserted = 0u64;
+    let mut duplicates = 0u64;
+    let mut errors = 0u64;
+
+    for (i, fact) in facts.iter().enumerate() {
+        let body = serde_json::json!({
+            "content": fact.text,
+            "domain": fact.domain,
+            "source": fact.source,
+        });
+
+        match client
+            .post(format!("{base_url}/api/v1/data"))
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    inserted += 1;
+                    if (i + 1) % 10 == 0 || i + 1 == total {
+                        println!("  [{}/{}] Inseriti: {inserted} | Duplicati: {duplicates}", i + 1, total);
+                    }
+                } else if status.as_u16() == 409 {
+                    duplicates += 1;
+                } else {
+                    errors += 1;
+                    tracing::warn!("Errore inserimento fatto {}: HTTP {}", i, status);
+                }
+            }
+            Err(e) => {
+                errors += 1;
+                tracing::warn!("Errore connessione: {e}");
+            }
+        }
+    }
+
+    println!();
+    println!("Seed completato!");
+    println!("  Totale fatti:  {total}");
+    println!("  Inseriti:      {inserted}");
+    println!("  Duplicati:     {duplicates}");
+    println!("  Errori:        {errors}");
 
     Ok(())
 }
