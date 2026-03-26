@@ -137,6 +137,7 @@ pub fn node_routes() -> Router<Arc<AppState>> {
         .route("/api/v1/node/status", get(node_status))
         .route("/api/v1/node/peers", get(node_peers))
         .route("/api/v1/node/stats", get(node_stats))
+        .route("/api/v1/node/consensus/:id", get(get_consensus_status))
 }
 
 /// Route per /api/v1/network/*
@@ -493,10 +494,19 @@ async fn node_status(State(state): State<Arc<AppState>>) -> Json<NodeStatusRespo
     })
 }
 
-/// GET /api/v1/node/peers
-async fn node_peers(State(_state): State<Arc<AppState>>) -> Json<Vec<PeerResponse>> {
-    // TODO: integrate with NetworkManager peers list
-    Json(vec![])
+/// GET /api/v1/node/peers — Lista peer reale da AppState.
+async fn node_peers(State(state): State<Arc<AppState>>) -> Json<Vec<PeerResponse>> {
+    let addrs = state.get_peers().await;
+    Json(
+        addrs
+            .iter()
+            .enumerate()
+            .map(|(i, addr)| PeerResponse {
+                node_id: format!("peer-{i}"),
+                address: addr.to_string(),
+            })
+            .collect(),
+    )
 }
 
 /// GET /api/v1/node/stats
@@ -504,17 +514,56 @@ async fn node_stats(State(state): State<Arc<AppState>>) -> Json<NodeStatsRespons
     let total_data = state.data_count();
     Json(NodeStatsResponse {
         total_data,
-        total_validations: total_data, // Each insert is one validation
-        avg_score: 0.0,               // TODO: calculate running average
+        total_validations: total_data,
+        avg_score: 0.0,
     })
 }
 
-/// GET /api/v1/network/health
-async fn network_health(State(_state): State<Arc<AppState>>) -> Json<NetworkHealthResponse> {
+/// GET /api/v1/node/consensus/:id — Stato del consenso per un dato.
+async fn get_consensus_status(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let info_key = AppState::make_key(PREFIX_INFO, &id);
+    let ddna_key = AppState::make_key(PREFIX_DDNA, &id);
+    let peers = state.get_peers().await;
+
+    match state.db.get(&info_key) {
+        Ok(Some(info_bytes)) => {
+            let has_ddna = state.db.get(&ddna_key).ok().flatten().is_some();
+            if let Ok(info) = serde_json::from_slice::<DataInfo>(&info_bytes) {
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "id": id,
+                        "score": info.score,
+                        "domain": info.domain,
+                        "has_ddna": has_ddna,
+                        "peer_count": peers.len(),
+                        "consensus_possible": !peers.is_empty(),
+                    })),
+                )
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Info corrotta"})),
+                )
+            }
+        }
+        _ => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Dato non trovato", "id": id})),
+        ),
+    }
+}
+
+/// GET /api/v1/network/health — Salute rete con peer count reale.
+async fn network_health(State(state): State<Arc<AppState>>) -> Json<NetworkHealthResponse> {
+    let peers = state.get_peers().await;
     Json(NetworkHealthResponse {
-        status: "healthy".into(),
-        connected_peers: 0,
-        network_score: 1.0,
+        status: if peers.is_empty() { "standalone" } else { "healthy" }.into(),
+        connected_peers: peers.len(),
+        network_score: if peers.is_empty() { 0.5 } else { 1.0 },
     })
 }
 

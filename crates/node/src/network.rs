@@ -409,4 +409,133 @@ mod tests {
         let data_key = AppState::make_key(PREFIX_DATA, "net-test");
         assert!(state.db.get(data_key).unwrap().is_some());
     }
+
+    /// E2E test: 2 nodi in-process, inserisci dato via HTTP su nodo 1,
+    /// verifica che il dato viene replicato su nodo 2 via consenso.
+    #[tokio::test]
+    async fn test_e2e_two_node_replication() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        // Crea 2 stati indipendenti
+        let state1 = temp_state();
+        let state2 = temp_state();
+
+        // Avvia P2P listener per nodo 2 (il peer che voterà)
+        let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let peer2_addr = listener2.local_addr().unwrap();
+        let state2_clone = state2.clone();
+
+        // Handler che accetta multiple connessioni
+        tokio::spawn(async move {
+            loop {
+                match listener2.accept().await {
+                    Ok((mut stream, peer_addr)) => {
+                        let s = state2_clone.clone();
+                        let peers: Arc<RwLock<HashMap<String, PeerInfo>>> =
+                            Arc::new(RwLock::new(HashMap::new()));
+                        tokio::spawn(async move {
+                            let _ = handle_connection(
+                                &mut stream,
+                                peer_addr,
+                                &s.node_id,
+                                &peers,
+                                &s,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Registra nodo 2 come peer di nodo 1
+        state1.add_peer(peer2_addr).await;
+
+        // Inserisci dato su nodo 1 via HTTP
+        let app = varcavia_uag::server::create_router(state1.clone());
+        let body = serde_json::json!({
+            "content": "Roma: temperatura 25C, umidita 60 percento",
+            "domain": "climate",
+            "source": "sensor-01"
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::CREATED);
+
+        let resp_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+        let data_id = json["id"].as_str().unwrap().to_string();
+
+        // Aspetta che il consenso in background completi
+        tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
+
+        // Verifica: dato presente su nodo 1
+        let key1 = AppState::make_key(PREFIX_DATA, &data_id);
+        assert!(state1.db.get(&key1).unwrap().is_some(), "Dato non trovato su nodo 1");
+
+        // Verifica: dato replicato su nodo 2 (via VoteRequest approve)
+        let key2 = AppState::make_key(PREFIX_DATA, &data_id);
+        assert!(state2.db.get(&key2).unwrap().is_some(), "Dato non replicato su nodo 2");
+
+        // Verifica: nodo 1 può leggere il dato via HTTP
+        let app2 = varcavia_uag::server::create_router(state1.clone());
+        let response = app2
+            .oneshot(
+                Request::builder()
+                    .uri(&format!("/api/v1/data/{data_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        // Verifica: nodo 2 ha il dato nel suo storage
+        let app3 = varcavia_uag::server::create_router(state2.clone());
+        let response = app3
+            .oneshot(
+                Request::builder()
+                    .uri(&format!("/api/v1/data/{data_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["content"]
+            .as_str()
+            .unwrap()
+            .contains("Roma"));
+
+        // Verifica: consensus endpoint
+        let app4 = varcavia_uag::server::create_router(state1);
+        let response = app4
+            .oneshot(
+                Request::builder()
+                    .uri(&format!("/api/v1/node/consensus/{data_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
 }

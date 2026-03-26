@@ -1,7 +1,7 @@
 //! Pipeline CDE — Orchestrazione dei 6 stadi di pulizia.
 
 use varcavia_ddna::DataDna;
-use crate::dedup::{ExactDedupIndex, LshIndex};
+use crate::dedup::{ExactDedupIndex, LshIndex, SemanticDedupIndex};
 use crate::freshness;
 use crate::normalize::{self, VufRecord};
 use crate::scoring::CdeScore;
@@ -13,7 +13,7 @@ use crate::{CdeError, Result};
 pub struct PipelineConfig {
     /// Soglia LSH per near-duplicates (default 0.85)
     pub lsh_threshold: f64,
-    /// Soglia per deduplicazione semantica (default 0.1 distanza coseno)
+    /// Soglia per deduplicazione semantica (default 0.9 Jaccard trigram)
     pub semantic_threshold: f64,
     /// Finestra di freschezza in ore (default 24)
     pub freshness_window_hours: u32,
@@ -25,7 +25,7 @@ impl Default for PipelineConfig {
     fn default() -> Self {
         PipelineConfig {
             lsh_threshold: 0.85,
-            semantic_threshold: 0.1,
+            semantic_threshold: 0.9,
             freshness_window_hours: 24,
             min_source_reputation: 0.3,
         }
@@ -50,16 +50,19 @@ pub struct Pipeline {
     config: PipelineConfig,
     exact_index: ExactDedupIndex,
     lsh_index: LshIndex,
+    semantic_index: SemanticDedupIndex,
 }
 
 impl Pipeline {
     /// Crea una nuova pipeline con la configurazione specificata.
     pub fn new(config: PipelineConfig) -> Self {
         let lsh_threshold = config.lsh_threshold;
+        let semantic_threshold = config.semantic_threshold;
         Pipeline {
             config,
             exact_index: ExactDedupIndex::new(),
             lsh_index: LshIndex::new(128, lsh_threshold),
+            semantic_index: SemanticDedupIndex::new(semantic_threshold),
         }
     }
 
@@ -92,9 +95,20 @@ impl Pipeline {
         }
         stages_passed.push("dedup_lsh".into());
 
-        // STADIO 3: Deduplicazione semantica (richiede Python agent)
-        // Per ora: skip, segna come TODO
-        stages_passed.push("dedup_semantic_skipped".into());
+        // STADIO 3: Deduplicazione semantica (character trigram Jaccard)
+        // Rust-native: confronta trigrammi di caratteri per catturare testi simili.
+        // TODO: sostituire con embedding ONNX (all-MiniLM-L6-v2) per similarità semantica reale.
+        if let Ok(text) = std::str::from_utf8(data) {
+            if let Some((existing_id, similarity)) =
+                self.semantic_index.check_semantic_duplicate(text)
+            {
+                warnings.push(format!(
+                    "Duplicato semantico: {} (similarità: {similarity:.2})",
+                    existing_id
+                ));
+            }
+        }
+        stages_passed.push("dedup_semantic".into());
 
         // STADIO 4: Validazione fonte
         let source_result = validation::validate_source(
@@ -119,17 +133,28 @@ impl Pipeline {
             self.config.freshness_window_hours as i64 * 3600 * 1_000_000;
         let freshness_result = freshness::check_freshness(ddna, freshness_window_us);
 
+        // Coerenza: se non ci sono warning semantici, coerenza = 1.0
+        let coherence = if warnings.iter().any(|w| w.contains("semantico")) {
+            0.5
+        } else {
+            1.0
+        };
+
         let score = CdeScore::compute(
             source_result.source_reputation as f64,
-            1.0, // Coerenza: TODO, richiede AI agent
+            coherence,
             freshness_result.freshness_score,
             1, // Validazioni iniziali: 1 (la nostra)
         );
         stages_passed.push("scoring".into());
 
         // Registra negli indici
-        self.exact_index.insert(ddna.fingerprint.blake3, data_id.clone());
-        self.lsh_index.insert(data_id, data);
+        self.exact_index
+            .insert(ddna.fingerprint.blake3, data_id.clone());
+        self.lsh_index.insert(data_id.clone(), data);
+        if let Ok(text) = std::str::from_utf8(data) {
+            self.semantic_index.insert(data_id, text);
+        }
 
         Ok(PipelineResult {
             record,
@@ -162,7 +187,7 @@ mod tests {
         let data = b"La temperatura a Roma e' 22 gradi";
         let (ddna, _kp) = create_test_ddna(data);
         let result = pipeline.process(data, &ddna, "climate").unwrap();
-        assert!(!result.stages_passed.is_empty());
+        assert!(result.stages_passed.contains(&"dedup_semantic".to_string()));
         assert!(result.score.overall > 0.0);
     }
 
@@ -172,7 +197,6 @@ mod tests {
         let data = b"dato duplicato";
         let (ddna, _kp) = create_test_ddna(data);
         pipeline.process(data, &ddna, "test").unwrap();
-        // Second time: should fail
         let result = pipeline.process(data, &ddna, "test");
         assert!(result.is_err());
     }
@@ -180,10 +204,10 @@ mod tests {
     #[test]
     fn test_pipeline_different_data_ok() {
         let mut pipeline = Pipeline::new(PipelineConfig::default());
-        let (ddna1, _) = create_test_ddna(b"dato uno");
-        let (ddna2, _) = create_test_ddna(b"dato due");
-        assert!(pipeline.process(b"dato uno", &ddna1, "test").is_ok());
-        assert!(pipeline.process(b"dato due", &ddna2, "test").is_ok());
+        let (ddna1, _) = create_test_ddna(b"dato uno completamente diverso");
+        let (ddna2, _) = create_test_ddna(b"dato due totalmente differente");
+        assert!(pipeline.process(b"dato uno completamente diverso", &ddna1, "test").is_ok());
+        assert!(pipeline.process(b"dato due totalmente differente", &ddna2, "test").is_ok());
         assert_eq!(pipeline.data_count(), 2);
     }
 
@@ -191,8 +215,25 @@ mod tests {
     fn test_pipeline_data_count() {
         let mut pipeline = Pipeline::new(PipelineConfig::default());
         assert_eq!(pipeline.data_count(), 0);
-        let (ddna, _) = create_test_ddna(b"test");
-        pipeline.process(b"test", &ddna, "test").unwrap();
+        let (ddna, _) = create_test_ddna(b"test pipeline count");
+        pipeline.process(b"test pipeline count", &ddna, "test").unwrap();
         assert_eq!(pipeline.data_count(), 1);
+    }
+
+    #[test]
+    fn test_pipeline_semantic_warning() {
+        let mut pipeline = Pipeline::new(PipelineConfig {
+            semantic_threshold: 0.6, // Lower threshold to catch similar texts
+            ..Default::default()
+        });
+        let data1 = b"La temperatura a Roma oggi e ventitreesima gradi celsius";
+        let data2 = b"La temperatura a Roma oggi e ventiquattro gradi celsius";
+        let (ddna1, _) = create_test_ddna(data1);
+        let (ddna2, _) = create_test_ddna(data2);
+        let r1 = pipeline.process(data1, &ddna1, "climate").unwrap();
+        assert!(r1.warnings.is_empty());
+        let r2 = pipeline.process(data2, &ddna2, "climate").unwrap();
+        // Second insert should have a semantic similarity warning
+        assert!(r2.warnings.iter().any(|w| w.contains("semantico")));
     }
 }

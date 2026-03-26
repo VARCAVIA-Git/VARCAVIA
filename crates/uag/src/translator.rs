@@ -11,6 +11,8 @@ pub fn translate_format(
     match (from_format, to_format) {
         ("json", "csv") => json_to_csv(data),
         ("csv", "json") => csv_to_json(data),
+        ("json", "xml") => json_to_xml(data),
+        ("xml", "json") => xml_to_json(data),
         ("json", "json") => serde_json::to_string_pretty(data)
             .map_err(|e| UagError::TranslationFailed(e.to_string())),
         _ => Err(UagError::UnsupportedFormat(format!(
@@ -29,7 +31,6 @@ fn json_to_csv(data: &serde_json::Value) -> Result<String> {
         return Ok(String::new());
     }
 
-    // Estrai header dal primo oggetto
     let first = arr[0]
         .as_object()
         .ok_or_else(|| UagError::TranslationFailed("Array deve contenere oggetti".into()))?;
@@ -86,7 +87,6 @@ fn csv_to_json(data: &serde_json::Value) -> Result<String> {
         let mut obj = serde_json::Map::new();
         for (i, header) in headers.iter().enumerate() {
             let value = values.get(i).unwrap_or(&"");
-            // Prova a parsare come numero
             if let Ok(n) = value.parse::<f64>() {
                 obj.insert(header.to_string(), serde_json::json!(n));
             } else {
@@ -98,6 +98,139 @@ fn csv_to_json(data: &serde_json::Value) -> Result<String> {
 
     serde_json::to_string_pretty(&result)
         .map_err(|e| UagError::TranslationFailed(e.to_string()))
+}
+
+/// Converte JSON in XML.
+fn json_to_xml(data: &serde_json::Value) -> Result<String> {
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    json_value_to_xml(data, "root", &mut xml, 0);
+    Ok(xml)
+}
+
+fn json_value_to_xml(value: &serde_json::Value, tag: &str, out: &mut String, indent: usize) {
+    let pad = "  ".repeat(indent);
+    match value {
+        serde_json::Value::Object(map) => {
+            out.push_str(&format!("{pad}<{tag}>\n"));
+            for (key, val) in map {
+                json_value_to_xml(val, key, out, indent + 1);
+            }
+            out.push_str(&format!("{pad}</{tag}>\n"));
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                json_value_to_xml(item, tag, out, indent);
+            }
+        }
+        serde_json::Value::String(s) => {
+            let escaped = xml_escape(s);
+            out.push_str(&format!("{pad}<{tag}>{escaped}</{tag}>\n"));
+        }
+        serde_json::Value::Number(n) => {
+            out.push_str(&format!("{pad}<{tag}>{n}</{tag}>\n"));
+        }
+        serde_json::Value::Bool(b) => {
+            out.push_str(&format!("{pad}<{tag}>{b}</{tag}>\n"));
+        }
+        serde_json::Value::Null => {
+            out.push_str(&format!("{pad}<{tag}/>\n"));
+        }
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Converte semplice XML (passato come stringa in un campo JSON) in JSON.
+fn xml_to_json(data: &serde_json::Value) -> Result<String> {
+    let xml_str = data
+        .as_str()
+        .ok_or_else(|| UagError::TranslationFailed("Input deve essere una stringa XML".into()))?;
+
+    let value = parse_xml_simple(xml_str)?;
+    serde_json::to_string_pretty(&value)
+        .map_err(|e| UagError::TranslationFailed(e.to_string()))
+}
+
+/// Parser XML minimale — gestisce elementi semplici con testo.
+fn parse_xml_simple(xml: &str) -> Result<serde_json::Value> {
+    let mut result = serde_json::Map::new();
+    let content = xml.trim();
+
+    // Skip XML declaration
+    let content = if let Some(rest) = content.strip_prefix("<?") {
+        rest.split_once("?>")
+            .map(|(_, after)| after.trim())
+            .unwrap_or(content)
+    } else {
+        content
+    };
+
+    parse_xml_elements(content, &mut result)?;
+
+    Ok(serde_json::Value::Object(result))
+}
+
+fn parse_xml_elements(content: &str, map: &mut serde_json::Map<String, serde_json::Value>) -> Result<()> {
+    let mut remaining = content.trim();
+
+    while !remaining.is_empty() {
+        // Find opening tag
+        let Some(tag_start) = remaining.find('<') else {
+            break;
+        };
+
+        // Skip if it's a closing tag at top level
+        if remaining[tag_start + 1..].starts_with('/') {
+            break;
+        }
+
+        // Self-closing tag
+        if let Some(end) = remaining[tag_start..].find("/>") {
+            let tag_name = &remaining[tag_start + 1..tag_start + end].trim();
+            map.insert(tag_name.to_string(), serde_json::Value::Null);
+            remaining = &remaining[tag_start + end + 2..];
+            continue;
+        }
+
+        let Some(tag_end) = remaining[tag_start..].find('>') else {
+            break;
+        };
+        let tag_end = tag_start + tag_end;
+        let tag_name = remaining[tag_start + 1..tag_end].trim().to_string();
+
+        // Find closing tag
+        let close_tag = format!("</{tag_name}>");
+        let Some(close_pos) = remaining.find(&close_tag) else {
+            break;
+        };
+
+        let inner = &remaining[tag_end + 1..close_pos];
+
+        // Check if inner content has child elements
+        if inner.contains('<') {
+            let mut child_map = serde_json::Map::new();
+            parse_xml_elements(inner, &mut child_map)?;
+            map.insert(tag_name, serde_json::Value::Object(child_map));
+        } else {
+            // Leaf text node
+            let text = inner.trim();
+            if let Ok(n) = text.parse::<f64>() {
+                map.insert(tag_name, serde_json::json!(n));
+            } else {
+                map.insert(tag_name, serde_json::json!(text));
+            }
+        }
+
+        remaining = &remaining[close_pos + close_tag.len()..];
+        remaining = remaining.trim();
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -126,6 +259,45 @@ mod tests {
     }
 
     #[test]
+    fn test_json_to_xml() {
+        let data = serde_json::json!({"city": "Roma", "temp": 22});
+        let xml = json_to_xml(&data).unwrap();
+        assert!(xml.contains("<?xml"));
+        assert!(xml.contains("<city>Roma</city>"));
+        assert!(xml.contains("<temp>22</temp>"));
+    }
+
+    #[test]
+    fn test_json_array_to_xml() {
+        let data = serde_json::json!({
+            "items": [
+                {"name": "a"},
+                {"name": "b"}
+            ]
+        });
+        let xml = json_to_xml(&data).unwrap();
+        assert!(xml.contains("<name>a</name>"));
+        assert!(xml.contains("<name>b</name>"));
+    }
+
+    #[test]
+    fn test_xml_to_json() {
+        let xml = serde_json::json!("<root><city>Roma</city><temp>22</temp></root>");
+        let json_str = xml_to_json(&xml).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["root"]["city"], "Roma");
+        assert_eq!(parsed["root"]["temp"], 22.0);
+    }
+
+    #[test]
+    fn test_xml_with_declaration() {
+        let xml = serde_json::json!("<?xml version=\"1.0\"?><data><val>42</val></data>");
+        let json_str = xml_to_json(&xml).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["data"]["val"], 42.0);
+    }
+
+    #[test]
     fn test_translate_json_to_csv() {
         let data = serde_json::json!([{"a": 1, "b": 2}]);
         let result = translate_format(&data, "json", "csv").unwrap();
@@ -133,9 +305,16 @@ mod tests {
     }
 
     #[test]
+    fn test_translate_json_to_xml() {
+        let data = serde_json::json!({"key": "value"});
+        let result = translate_format(&data, "json", "xml").unwrap();
+        assert!(result.contains("<key>value</key>"));
+    }
+
+    #[test]
     fn test_unsupported_format() {
         let data = serde_json::json!({});
-        let result = translate_format(&data, "xml", "yaml");
+        let result = translate_format(&data, "yaml", "toml");
         assert!(result.is_err());
     }
 
@@ -151,5 +330,12 @@ mod tests {
         let data = serde_json::json!([]);
         let csv = json_to_csv(&data).unwrap();
         assert!(csv.is_empty());
+    }
+
+    #[test]
+    fn test_xml_escape() {
+        let data = serde_json::json!({"msg": "a < b & c > d"});
+        let xml = json_to_xml(&data).unwrap();
+        assert!(xml.contains("a &lt; b &amp; c &gt; d"));
     }
 }
