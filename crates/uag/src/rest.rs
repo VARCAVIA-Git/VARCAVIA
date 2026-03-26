@@ -44,6 +44,8 @@ pub struct DataInfo {
     pub domain: String,
     pub score: f64,
     pub inserted_at_us: i64,
+    #[serde(default)]
+    pub verification_count: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,9 +154,12 @@ pub fn translate_routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/v1/translate", post(translate))
 }
 
-/// Route hero per demo pubblica
+/// Route hero per demo pubblica + health + stats
 pub fn hero_routes() -> Router<Arc<AppState>> {
-    Router::new().route("/api/v1/verify", get(hero_verify))
+    Router::new()
+        .route("/api/v1/verify", get(hero_verify))
+        .route("/api/v1/stats", get(public_stats))
+        .route("/health", get(health_check))
 }
 
 // === Handlers ===
@@ -216,6 +221,7 @@ async fn insert_data(
         domain: domain.clone(),
         score,
         inserted_at_us: chrono::Utc::now().timestamp_micros(),
+        verification_count: 1,
     };
 
     if let Err(e) = state.db.insert(data_key, content_bytes.as_slice()) {
@@ -646,16 +652,23 @@ async fn hero_verify(
         match pipeline.process(content_bytes, &ddna, "general") {
             Ok(result) => (result.score.overall, result.warnings),
             Err(e) => {
-                // Se duplicato, recupera lo score esistente
+                // Se duplicato, recupera info e incrementa verification_count
+                state.inc_verifications();
                 let info_key = AppState::make_key(PREFIX_INFO, &data_id);
-                let existing_score = state
-                    .db
-                    .get(&info_key)
-                    .ok()
-                    .flatten()
-                    .and_then(|b| serde_json::from_slice::<DataInfo>(&b).ok())
-                    .map(|i| i.score)
-                    .unwrap_or(0.0);
+                let (existing_score, vcount) = match state.db.get(&info_key) {
+                    Ok(Some(b)) => {
+                        if let Ok(mut info) = serde_json::from_slice::<DataInfo>(&b) {
+                            info.verification_count += 1;
+                            let sc = info.score;
+                            let vc = info.verification_count;
+                            if let Ok(j) = serde_json::to_vec(&info) {
+                                let _ = state.db.insert(&info_key, j);
+                            }
+                            (sc, vc)
+                        } else { (0.0, 1) }
+                    }
+                    _ => (0.0, 1),
+                };
                 return (
                     StatusCode::OK,
                     Json(serde_json::json!({
@@ -680,6 +693,7 @@ async fn hero_verify(
                             "version": ddna.version,
                         },
                         "score": existing_score,
+                        "verification_count": vcount,
                         "duplicate": true,
                         "note": format!("{e}"),
                     })),
@@ -689,6 +703,7 @@ async fn hero_verify(
     };
 
     // Serializza e salva
+    state.inc_verifications();
     if let Ok(ddna_bytes) = ddna.to_bytes() {
         let data_key = AppState::make_key(PREFIX_DATA, &data_id);
         let ddna_key = AppState::make_key(PREFIX_DDNA, &data_id);
@@ -699,6 +714,7 @@ async fn hero_verify(
             domain: "general".into(),
             score,
             inserted_at_us: chrono::Utc::now().timestamp_micros(),
+            verification_count: 1,
         };
         if let Ok(j) = serde_json::to_vec(&info) {
             let _ = state.db.insert(info_key, j);
@@ -729,8 +745,46 @@ async fn hero_verify(
                 "version": ddna.version,
             },
             "score": score,
+            "verification_count": 1,
             "warnings": warnings,
             "duplicate": false,
+        })),
+    )
+}
+
+/// GET /api/v1/stats — Statistiche pubbliche del nodo.
+async fn public_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let peers = state.get_peers().await;
+    Json(serde_json::json!({
+        "total_data": state.data_count(),
+        "total_verifications": state.total_verifications.load(std::sync::atomic::Ordering::Relaxed),
+        "uptime_secs": state.uptime_secs(),
+        "node_count": 1 + peers.len(),
+        "avg_score": compute_avg_score(&state.db),
+    }))
+}
+
+fn compute_avg_score(db: &sled::Db) -> f64 {
+    let mut sum = 0.0;
+    let mut count = 0u64;
+    for (_, val) in db.scan_prefix(PREFIX_INFO).flatten() {
+        if let Ok(info) = serde_json::from_slice::<DataInfo>(&val) {
+            sum += info.score;
+            count += 1;
+        }
+    }
+    if count == 0 { 0.0 } else { sum / count as f64 }
+}
+
+/// GET /health — Health check per Docker/Kubernetes.
+async fn health_check(State(state): State<Arc<AppState>>) -> (StatusCode, Json<serde_json::Value>) {
+    let ok = state.db.was_recovered() || state.uptime_secs() > 0;
+    (
+        if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE },
+        Json(serde_json::json!({
+            "status": if ok { "healthy" } else { "unhealthy" },
+            "uptime_secs": state.uptime_secs(),
+            "data_count": state.data_count(),
         })),
     )
 }

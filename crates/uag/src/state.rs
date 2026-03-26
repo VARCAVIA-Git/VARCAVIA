@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::RwLock;
 use varcavia_cde::pipeline::{Pipeline, PipelineConfig};
@@ -26,6 +27,8 @@ pub struct AppState {
     pub started_at: Instant,
     /// Indirizzi P2P dei peer noti
     pub peer_addrs: RwLock<Vec<SocketAddr>>,
+    /// Contatore totale verifiche (atomico, lock-free)
+    pub total_verifications: AtomicU64,
 }
 
 impl AppState {
@@ -40,6 +43,7 @@ impl AppState {
             node_id,
             started_at: Instant::now(),
             peer_addrs: RwLock::new(Vec::new()),
+            total_verifications: AtomicU64::new(0),
         }
     }
 
@@ -56,6 +60,11 @@ impl AppState {
     /// Conta i dati nel database (scan prefix "d:").
     pub fn data_count(&self) -> u64 {
         self.db.scan_prefix(PREFIX_DATA).count() as u64
+    }
+
+    /// Incrementa contatore verifiche e restituisce il nuovo valore.
+    pub fn inc_verifications(&self) -> u64 {
+        self.total_verifications.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     /// Helper: costruisce una chiave con prefisso.
@@ -115,6 +124,14 @@ mod tests {
     fn test_uptime() {
         let state = temp_state();
         assert!(state.uptime_secs() < 2);
+    }
+
+    #[test]
+    fn test_verifications_counter() {
+        let state = temp_state();
+        assert_eq!(state.inc_verifications(), 1);
+        assert_eq!(state.inc_verifications(), 2);
+        assert_eq!(state.total_verifications.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]

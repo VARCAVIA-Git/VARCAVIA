@@ -230,6 +230,7 @@ fn handle_vote_request(
             domain: domain.to_string(),
             score: vote.confidence,
             inserted_at_us: chrono::Utc::now().timestamp_micros(),
+            verification_count: 1,
         };
         if let Ok(info_json) = serde_json::to_vec(&info) {
             let _ = state.db.insert(info_key, info_json);
@@ -537,5 +538,82 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
+
+    /// Load test: 100 inserts + 100 queries, measure throughput.
+    #[tokio::test]
+    async fn test_load_throughput() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let state = temp_state();
+        let n = 100;
+
+        // Insert N unique data items
+        let start = std::time::Instant::now();
+        for i in 0..n {
+            let app = varcavia_uag::server::create_router(state.clone());
+            let body = serde_json::json!({
+                "content": format!("Load test datum number {} with unique content hash seed", i),
+                "domain": "test",
+                "source": "load-test"
+            });
+            let r = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/data")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                r.status() == axum::http::StatusCode::CREATED,
+                "Insert {i} failed with status {}",
+                r.status()
+            );
+        }
+        let insert_elapsed = start.elapsed();
+
+        // Query all
+        let start = std::time::Instant::now();
+        for _ in 0..n {
+            let app = varcavia_uag::server::create_router(state.clone());
+            let body = serde_json::json!({"query": "", "limit": 10});
+            let r = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/data/query")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(r.status(), axum::http::StatusCode::OK);
+        }
+        let query_elapsed = start.elapsed();
+
+        let insert_per_sec = n as f64 / insert_elapsed.as_secs_f64();
+        let query_per_sec = n as f64 / query_elapsed.as_secs_f64();
+
+        eprintln!(
+            "Load test: {} inserts in {:.1}ms ({:.0}/s), {} queries in {:.1}ms ({:.0}/s)",
+            n,
+            insert_elapsed.as_millis(),
+            insert_per_sec,
+            n,
+            query_elapsed.as_millis(),
+            query_per_sec,
+        );
+
+        // Sanity: should be faster than 10/s at minimum
+        assert!(insert_per_sec > 10.0, "Insert throughput too low: {insert_per_sec:.0}/s");
+        assert!(query_per_sec > 10.0, "Query throughput too low: {query_per_sec:.0}/s");
+        assert_eq!(state.data_count(), n);
     }
 }
