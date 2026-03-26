@@ -1,0 +1,32 @@
+[package]
+name = "varcavia-node"
+description = "Nodo VARCAVIA — Binary principale del sistema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "varcavia-node"
+path = "src/main.rs"
+
+[dependencies]
+varcavia-ddna = { path = "../ddna" }
+varcavia-vtp = { path = "../vtp" }
+varcavia-arc = { path = "../arc" }
+varcavia-cde = { path = "../cde" }
+varcavia-uag = { path = "../uag" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+config.workspace = true
+rocksdb.workspace = true
+libp2p.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+hex.workspace = true
+shellexpand = "3.1"

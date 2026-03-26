@@ -1,0 +1,25 @@
+syntax = "proto3";
+package varcavia.vtp;
+
+import "ddna.proto";
+
+enum SemanticPriority {
+  CRITICAL = 0;
+  HIGH = 1;
+  NORMAL = 2;
+  LOW = 3;
+  BACKGROUND = 4;
+}
+
+message VtpPacket {
+  string id = 1;
+  uint32 version = 2;
+  SemanticPriority priority = 3;
+  bytes source_node = 4;
+  bytes dest_node = 5;         // optional
+  int64 created_at_us = 6;
+  uint32 ttl = 7;
+  bool is_delta = 8;
+  bytes payload_hash = 9;
+  bytes payload = 10;
+}

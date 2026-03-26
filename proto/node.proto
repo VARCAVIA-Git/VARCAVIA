@@ -1,0 +1,39 @@
+syntax = "proto3";
+package varcavia.node;
+
+// Messaggio di discovery tra nodi
+message NodeAnnounce {
+  bytes node_id = 1;
+  string name = 2;
+  string version = 3;
+  uint32 listen_port = 4;
+  repeated string domains = 5;     // Domini di competenza
+  double reputation = 6;
+  int64 uptime_secs = 7;
+}
+
+// Richiesta di sincronizzazione stato
+message SyncRequest {
+  bytes node_id = 1;
+  int64 last_sync_us = 2;      // Ultimo timestamp sincronizzato
+  uint32 max_items = 3;
+}
+
+// Risposta di sincronizzazione
+message SyncResponse {
+  repeated SyncItem items = 1;
+  int64 server_time_us = 2;
+  bool has_more = 3;
+}
+
+message SyncItem {
+  bytes ddna_hash = 1;
+  int64 timestamp_us = 2;
+  SyncAction action = 3;
+}
+
+enum SyncAction {
+  ADD = 0;
+  UPDATE = 1;
+  DELETE = 2;
+}

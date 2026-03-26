@@ -1,0 +1,29 @@
+# ════════════════════════════════════════════════════════════
+# VARCAVIA — Configurazione Rete Locale Multi-Nodo (Sviluppo)
+# ════════════════════════════════════════════════════════════
+#
+# Usato da: scripts/run_local_network.sh
+# Genera N nodi sulle porte 7700, 7701, 7702, ecc.
+
+[network]
+base_port = 7700
+api_base_port = 8080
+num_nodes = 3
+bind_address = "127.0.0.1"
+
+# I nodi si trovano via mDNS locale, nessun bootstrap necessario
+mdns_enabled = true
+
+[storage]
+# Ogni nodo usa una directory separata
+base_data_dir = "~/varcavia-data"
+# Pattern: {base_data_dir}/node-{N}
+max_size_per_node_gb = 5
+
+[simulation]
+# Latenza simulata tra nodi locali (millisecondi)
+# 0 = nessuna latenza aggiunta, utile per benchmark
+simulated_latency_ms = 0
+# Probabilità di perdita pacchetti (0.0 - 1.0)
+# 0.0 = nessuna perdita, utile per test di correttezza
+packet_loss_probability = 0.0

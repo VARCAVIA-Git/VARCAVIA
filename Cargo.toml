@@ -1,0 +1,84 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ddna",
+    "crates/vtp",
+    "crates/arc",
+    "crates/cde",
+    "crates/uag",
+    "crates/node",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "AGPL-3.0"
+authors = ["VARCAVIA Contributors"]
+repository = "https://github.com/varcavia/varcavia"
+
+[workspace.dependencies]
+# Crypto
+blake3 = "1.5"
+sha3 = "0.10"
+ed25519-dalek = { version = "2.1", features = ["serde", "rand_core"] }
+rand = "0.8"
+
+# Serializzazione
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rmp-serde = "1.3"                  # MessagePack
+prost = "0.13"                      # Protobuf runtime
+prost-types = "0.13"
+
+# Async
+tokio = { version = "1.38", features = ["full"] }
+futures = "0.3"
+
+# Networking
+libp2p = { version = "0.54", features = [
+    "tcp", "noise", "yamux", "mdns", "gossipsub",
+    "kad", "identify", "tokio", "macros"
+] }
+
+# Storage
+rocksdb = { version = "0.22", default-features = false, features = ["snappy"] }
+
+# Web server
+axum = { version = "0.7", features = ["json", "ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "limit"] }
+
+# Compressione
+zstd = "0.13"
+
+# Configurazione
+toml = "0.8"
+config = "0.14"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Errori
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utilità
+uuid = { version = "1.8", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+half = { version = "2.4", features = ["serde"] }    # f16 per semantic vectors
+hex = "0.4"
+base64 = "0.22"
+bytes = "1.6"
+
+[profile.dev]
+opt-level = 1              # Un po' di ottimizzazione anche in dev
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"               # Link-time optimization
+strip = true               # Rimuovi simboli debug
+codegen-units = 1          # Massima ottimizzazione

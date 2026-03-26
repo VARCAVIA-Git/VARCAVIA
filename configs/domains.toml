@@ -1,0 +1,52 @@
+# Domini di dati supportati da VARCAVIA
+# Ogni dominio ha priorità, parole chiave per classificazione,
+# e parametri specifici per la validazione.
+
+[domains.health]
+label = "Sanità"
+priority = "high"
+keywords = ["paziente", "diagnosi", "farmaco", "clinico", "terapia", "patient", "diagnosis"]
+min_source_reputation = 0.6
+committee_size = 11
+
+[domains.climate]
+label = "Clima e Ambiente"
+priority = "normal"
+keywords = ["temperatura", "precipitazioni", "emissioni", "CO2", "meteo", "climate"]
+min_source_reputation = 0.4
+committee_size = 7
+
+[domains.finance]
+label = "Finanza"
+priority = "high"
+keywords = ["mercato", "azioni", "PIL", "inflazione", "borsa", "stock", "GDP"]
+min_source_reputation = 0.7
+committee_size = 11
+
+[domains.science]
+label = "Ricerca Scientifica"
+priority = "normal"
+keywords = ["ricerca", "esperimento", "pubblicazione", "peer-review", "research"]
+min_source_reputation = 0.5
+committee_size = 7
+
+[domains.education]
+label = "Educazione"
+priority = "normal"
+keywords = ["studente", "corso", "università", "esame", "student", "university"]
+min_source_reputation = 0.3
+committee_size = 7
+
+[domains.emergency]
+label = "Emergenze"
+priority = "critical"
+keywords = ["emergenza", "disastro", "terremoto", "inondazione", "incendio", "emergency"]
+min_source_reputation = 0.5
+committee_size = 21
+
+[domains.general]
+label = "Generale"
+priority = "low"
+keywords = []
+min_source_reputation = 0.3
+committee_size = 7

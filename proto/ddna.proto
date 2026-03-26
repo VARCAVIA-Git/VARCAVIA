@@ -1,0 +1,68 @@
+syntax = "proto3";
+package varcavia.ddna;
+
+// Content Fingerprint — doppio hash del contenuto
+message ContentFingerprint {
+  bytes blake3 = 1;          // 32 bytes
+  bytes sha3_512 = 2;        // 64 bytes
+  uint64 content_size = 3;
+}
+
+// Source Identity — firma Ed25519 del produttore
+message SourceIdentity {
+  bytes public_key = 1;      // 32 bytes
+  bytes signature = 2;       // 64 bytes
+  IdentityType identity_type = 3;
+  float reputation_score = 4;
+}
+
+enum IdentityType {
+  PSEUDONYMOUS = 0;
+  INSTITUTIONAL = 1;
+}
+
+// Temporal Proof — timestamp certificato
+message TemporalProof {
+  int64 timestamp_us = 1;
+  ClockSource source_clock = 2;
+  uint32 precision_us = 3;
+}
+
+enum ClockSource {
+  SYSTEM = 0;
+  NTP = 1;
+  GPS = 2;
+}
+
+// Custody Entry — singolo passaggio nella catena
+message CustodyEntry {
+  bytes node_id = 1;          // 32 bytes
+  int64 timestamp_us = 2;
+  CustodyAction action = 3;
+  bytes signature = 4;        // 64 bytes
+}
+
+enum CustodyAction {
+  CREATED = 0;
+  RECEIVED = 1;
+  VALIDATED = 2;
+  FORWARDED = 3;
+}
+
+// Semantic Vector — embedding vettoriale
+message SemanticVector {
+  string model_id = 1;
+  uint32 dimensions = 2;
+  repeated float values = 3;   // f32 values
+}
+
+// Data DNA completo
+message DataDna {
+  uint32 version = 1;
+  ContentFingerprint fingerprint = 2;
+  SourceIdentity source = 3;
+  TemporalProof temporal = 4;
+  repeated CustodyEntry custody_chain = 5;
+  SemanticVector semantic_vector = 6;   // optional
+  bytes integrity_hash = 7;             // 32 bytes
+}

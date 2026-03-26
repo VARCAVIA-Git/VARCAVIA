@@ -1,0 +1,21 @@
+[package]
+name = "varcavia-uag"
+description = "Universal Access Gateway — API server REST/GraphQL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+varcavia-ddna = { path = "../ddna" }
+varcavia-cde = { path = "../cde" }
+varcavia-arc = { path = "../arc" }
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true

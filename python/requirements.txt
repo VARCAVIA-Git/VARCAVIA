@@ -1,0 +1,28 @@
+# ════════════════════════════════════════════════════════════
+# VARCAVIA — Dipendenze Python (AI Agents & CDE)
+# ════════════════════════════════════════════════════════════
+
+# AI/ML
+onnxruntime>=1.17.0        # Inference CPU per embedding models
+numpy>=1.26.0              # Calcolo numerico
+scipy>=1.12.0              # LSH e distanze vettoriali
+scikit-learn>=1.4.0        # Utilità ML (MinHash, clustering)
+
+# Tokenizer per modelli sentence-transformers
+tokenizers>=0.15.0
+
+# Comunicazione con nodo Rust
+# (JSON-RPC su socket Unix)
+
+# Utilità
+pydantic>=2.6.0            # Validazione dati strutturati
+orjson>=3.9.0              # JSON veloce (10x stdlib json)
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+
+# Code quality
+ruff>=0.3.0                # Linter + formatter
+mypy>=1.8.0                # Type checking

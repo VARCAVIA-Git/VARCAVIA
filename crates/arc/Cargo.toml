@@ -1,0 +1,18 @@
+[package]
+name = "varcavia-arc"
+description = "Adaptive Resonance Consensus — Consenso ultra-rapido distribuito"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+varcavia-ddna = { path = "../ddna" }
+varcavia-vtp = { path = "../vtp" }
+tokio.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true
+rand.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true

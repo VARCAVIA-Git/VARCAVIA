@@ -1,0 +1,45 @@
+# ════════════════════════════════════════════════════════════
+# VARCAVIA Node — Configurazione Default (Sviluppo Locale)
+# ════════════════════════════════════════════════════════════
+
+[node]
+name = "varcavia-dev-01"
+data_dir = "~/varcavia-data/node-01"
+log_level = "info"
+
+[network]
+listen_addr = "127.0.0.1"
+listen_port = 7700
+bootstrap_nodes = []           # Vuoto per primo nodo
+max_peers = 50
+mdns_enabled = true            # Discovery locale automatico
+
+[storage]
+engine = "rocksdb"
+max_size_gb = 10
+compression = "zstd"
+cache_size_mb = 256
+
+[arc]
+committee_size = 7
+confirmation_threshold = 0.67
+validation_timeout_ms = 500    # Più alto per dev locale
+reputation_decay_rate = 0.01
+
+[cde]
+dedup_lsh_threshold = 0.85
+semantic_dedup_threshold = 0.1
+freshness_window_hours = 24
+min_source_reputation = 0.3
+
+[ai]
+onnx_model_path = "models/all-MiniLM-L6-v2.onnx"
+embedding_dimensions = 384
+max_batch_size = 32
+agent_check_interval_secs = 10
+
+[api]
+enabled = true
+bind_addr = "127.0.0.1:8080"
+cors_origins = ["http://localhost:5173"]
+rate_limit_per_sec = 100
