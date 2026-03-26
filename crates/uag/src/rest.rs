@@ -703,7 +703,29 @@ async fn hero_verify(
 
     let data_id = ddna.id();
     let fingerprint_blake3 = hex::encode(ddna.fingerprint.blake3);
-    let fingerprint_sha3 = hex::encode(&ddna.fingerprint.sha3_512[..32]); // first 32 bytes hex
+    let fingerprint_sha3 = hex::encode(&ddna.fingerprint.sha3_512[..32]);
+
+    // Cross-check: cerca fatti simili nel DB
+    let (related_facts, cross_check_score) = find_related_facts(&state, &fact);
+
+    let dna_json = serde_json::json!({
+        "id": data_id,
+        "fingerprint": {
+            "blake3": fingerprint_blake3,
+            "sha3_512": fingerprint_sha3,
+        },
+        "source": {
+            "public_key": hex::encode(ddna.source.public_key),
+            "identity_type": "Pseudonymous",
+            "reputation": ddna.source.reputation_score,
+        },
+        "temporal": {
+            "timestamp_us": ddna.temporal.timestamp_us,
+            "clock_source": "System",
+            "precision_us": ddna.temporal.precision_us,
+        },
+        "version": ddna.version,
+    });
 
     // Pipeline CDE
     let (score, warnings) = {
@@ -711,7 +733,7 @@ async fn hero_verify(
         match pipeline.process(content_bytes, &ddna, "general") {
             Ok(result) => (result.score.overall, result.warnings),
             Err(e) => {
-                // Se duplicato, recupera info e incrementa verification_count
+                // Duplicato esatto — gia nel DB
                 state.inc_verifications();
                 let info_key = AppState::make_key(PREFIX_INFO, &data_id);
                 let (existing_score, vcount) = match state.db.get(&info_key) {
@@ -732,26 +754,12 @@ async fn hero_verify(
                     StatusCode::OK,
                     Json(serde_json::json!({
                         "fact": fact,
-                        "status": "already_verified",
-                        "data_dna": {
-                            "id": data_id,
-                            "fingerprint": {
-                                "blake3": fingerprint_blake3,
-                                "sha3_512": fingerprint_sha3,
-                            },
-                            "source": {
-                                "public_key": hex::encode(ddna.source.public_key),
-                                "identity_type": "Pseudonymous",
-                                "reputation": ddna.source.reputation_score,
-                            },
-                            "temporal": {
-                                "timestamp_us": ddna.temporal.timestamp_us,
-                                "clock_source": "System",
-                                "precision_us": ddna.temporal.precision_us,
-                            },
-                            "version": ddna.version,
-                        },
+                        "status": "already_certified",
+                        "message": "Previously certified — this fact was already in the network.",
+                        "data_dna": dna_json,
                         "score": existing_score,
+                        "cross_check_score": cross_check_score,
+                        "related_facts": related_facts,
                         "verification_count": vcount,
                         "duplicate": true,
                         "note": format!("{e}"),
@@ -761,7 +769,7 @@ async fn hero_verify(
         }
     };
 
-    // Serializza e salva
+    // Salva il nuovo fatto
     state.inc_verifications();
     state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if let Ok(ddna_bytes) = ddna.to_bytes() {
@@ -781,35 +789,71 @@ async fn hero_verify(
         }
     }
 
+    // Determina status in base al cross-check
+    let (status, message) = if cross_check_score >= 0.5 {
+        // Fatto simile trovato — segnala
+        ("similar_found", format!(
+            "Similar fact found in the network ({}% match). Cryptographic identity issued — this certifies provenance, not factual accuracy.",
+            (cross_check_score * 100.0).round()
+        ))
+    } else {
+        ("certified", "Certified — this fact has been cryptographically stamped with a Data DNA. This certifies its identity and provenance, not its factual accuracy.".to_string())
+    };
+
+    let mut certify_warnings = warnings;
+    if cross_check_score < 0.1 {
+        certify_warnings.push("No supporting facts found in the network".into());
+    }
+
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "fact": fact,
-            "status": "verified",
-            "data_dna": {
-                "id": data_id,
-                "fingerprint": {
-                    "blake3": fingerprint_blake3,
-                    "sha3_512": fingerprint_sha3,
-                },
-                "source": {
-                    "public_key": hex::encode(ddna.source.public_key),
-                    "identity_type": "Pseudonymous",
-                    "reputation": ddna.source.reputation_score,
-                },
-                "temporal": {
-                    "timestamp_us": ddna.temporal.timestamp_us,
-                    "clock_source": "System",
-                    "precision_us": ddna.temporal.precision_us,
-                },
-                "version": ddna.version,
-            },
+            "status": status,
+            "message": message,
+            "data_dna": dna_json,
             "score": score,
+            "cross_check_score": cross_check_score,
+            "related_facts": related_facts,
             "verification_count": 1,
-            "warnings": warnings,
+            "warnings": certify_warnings,
             "duplicate": false,
         })),
     )
+}
+
+/// Cerca fatti correlati nel DB per cross-check.
+/// Restituisce (related_facts_json, best_similarity).
+fn find_related_facts(state: &AppState, query: &str) -> (Vec<serde_json::Value>, f64) {
+    let mut scored: Vec<(String, String, f64)> = Vec::new();
+
+    for (key, val) in state.db.scan_prefix(PREFIX_DATA).flatten() {
+        let id = String::from_utf8_lossy(&key[PREFIX_DATA.len()..]).to_string();
+        let content = String::from_utf8_lossy(&val).to_string();
+        let sim = varcavia_cde::dedup::text_similarity(query, &content);
+        if sim > 0.05 {
+            scored.push((id, content, sim));
+        }
+    }
+
+    scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(5);
+
+    let cross_check_score = scored.first().map(|(_, _, s)| *s).unwrap_or(0.0);
+
+    let related: Vec<serde_json::Value> = scored
+        .iter()
+        .filter(|(_, _, s)| *s > 0.1)
+        .map(|(id, content, sim)| {
+            serde_json::json!({
+                "id": id,
+                "content": content,
+                "similarity": (sim * 1000.0).round() / 1000.0,
+            })
+        })
+        .collect();
+
+    (related, (cross_check_score * 1000.0).round() / 1000.0)
 }
 
 /// GET /api/v1/search?q=...&limit=5 — Ricerca semantica per similarita trigram.
@@ -1546,10 +1590,12 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["fact"], "Earth diameter is 12742 km");
-        assert_eq!(json["status"], "verified");
+        assert_eq!(json["status"], "certified");
         assert!(json["data_dna"]["id"].as_str().unwrap().len() == 64);
         assert!(json["score"].as_f64().unwrap() > 0.0);
         assert_eq!(json["duplicate"], false);
+        assert!(json["message"].as_str().unwrap().contains("not its factual accuracy"));
+        assert!(json["cross_check_score"].is_number());
     }
 
     #[tokio::test]
@@ -1563,15 +1609,16 @@ mod tests {
             .await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
 
-        // Second call — same fact → already_verified
+        // Second call — same fact → already_certified
         let app2 = crate::server::create_router(state);
         let r = app2
             .oneshot(Request::builder().uri("/api/v1/verify?fact=test+fact").body(Body::empty()).unwrap())
             .await.unwrap();
         let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["status"], "already_verified");
+        assert_eq!(json["status"], "already_certified");
         assert_eq!(json["duplicate"], true);
+        assert!(json["message"].as_str().unwrap().contains("Previously certified"));
     }
 
     #[tokio::test]

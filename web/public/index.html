@@ -67,8 +67,16 @@ a:hover{color:var(--ocra)}
 @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .result-head{display:flex;align-items:center;gap:16px;margin-bottom:14px}
 .badge{padding:4px 12px;border-radius:16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
-.badge-ok{background:#0d3320;color:var(--green);border:1px solid var(--green)}
+.badge-cert{background:#0d2a3d;color:var(--ciano);border:1px solid var(--ciano)}
 .badge-dup{background:#3a2e0d;color:var(--ocra);border:1px solid var(--ocra)}
+.badge-similar{background:#1a2d42;color:#7cb3ff;border:1px solid #7cb3ff}
+.cert-msg{font-size:11px;color:var(--dim);margin-top:4px;font-style:italic}
+.warning-box{background:#2a2200;border:1px solid #bb8800;border-radius:6px;padding:8px 12px;font-size:11px;color:#ddaa00;margin-top:10px}
+.related-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px}
+.related-box h4{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px}
+.related-item{font-size:12px;padding:4px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between}
+.related-item:last-child{border-bottom:none}
+.related-sim{color:var(--ciano);font-size:11px}
 .score-big{font-size:32px;font-weight:700;color:var(--ciano)}
 .score-big .u{font-size:14px;color:var(--dim)}
 .fact-bar{padding:10px 14px;background:var(--bg);border-left:3px solid var(--ciano);font-size:13px;margin-bottom:14px}
@@ -185,7 +193,10 @@ footer{border-top:1px solid var(--border);padding:36px 20px;text-align:center;co
             <span class="badge" id="vBadge"></span>
             <div class="score-big" id="vScore"></div>
           </div>
-          <div class="fact-bar" id="vFact"></div>
+          <div class="cert-msg" id="vMsg"></div>
+          <div class="fact-bar" id="vFact" style="margin-top:10px"></div>
+          <div id="vWarning" class="warning-box" style="display:none"></div>
+          <div id="vRelated" class="related-box" style="display:none"><h4>Related facts in the network</h4><div id="vRelatedList"></div></div>
           <div class="dna-box">
             <h4>Data DNA Certificate</h4>
             <div class="dna-row"><span class="dna-k">ID</span><span class="dna-v" id="dId"></span></div>
@@ -406,11 +417,37 @@ async function doVerify(){
     const r=await fetch('/api/v1/verify?fact='+encodeURIComponent(fact));
     const d=await r.json();
     if(d.error){showVerifyError(d.error);return}
-    const dna=d.data_dna,dup=d.duplicate;
-    document.getElementById('vBadge').textContent=dup?'Already Verified':'Verified';
-    document.getElementById('vBadge').className='badge '+(dup?'badge-dup':'badge-ok');
+    const dna=d.data_dna,st=d.status;
+
+    // Badge
+    const badges={certified:['CERTIFIED','badge-cert'],already_certified:['PREVIOUSLY CERTIFIED','badge-dup'],similar_found:['SIMILAR FOUND','badge-similar']};
+    const [bText,bClass]=badges[st]||['CERTIFIED','badge-cert'];
+    document.getElementById('vBadge').textContent=bText;
+    document.getElementById('vBadge').className='badge '+bClass;
+
+    // Message
+    document.getElementById('vMsg').textContent=d.message||'Cryptographic identity issued — not a truth claim';
+
     document.getElementById('vScore').innerHTML=(d.score*100).toFixed(1)+'<span class="u">%</span>';
     document.getElementById('vFact').textContent=d.fact;
+
+    // Warnings
+    const warnEl=document.getElementById('vWarning');
+    const warns=d.warnings||[];
+    if(warns.length>0){warnEl.textContent=warns.join('. ');warnEl.style.display='block'}
+    else{warnEl.style.display='none'}
+
+    // Related facts
+    const relEl=document.getElementById('vRelated');
+    const rels=d.related_facts||[];
+    if(rels.length>0){
+      document.getElementById('vRelatedList').innerHTML=rels.map(r=>
+        '<div class="related-item"><span>'+esc(r.content)+'</span><span class="related-sim">'+(r.similarity*100).toFixed(0)+'%</span></div>'
+      ).join('');
+      relEl.style.display='block';
+    }else{relEl.style.display='none'}
+
+    // DNA
     document.getElementById('dId').textContent=dna.id;
     document.getElementById('dB3').textContent=dna.fingerprint.blake3;
     document.getElementById('dS3').textContent=dna.fingerprint.sha3_512+'...';
