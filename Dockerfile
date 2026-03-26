@@ -9,4 +9,4 @@ COPY --from=builder /app/target/release/varcavia-node /usr/local/bin/
 RUN useradd -r -s /bin/false varcavia && mkdir -p /app/data && chown varcavia:varcavia /app/data
 USER varcavia
 EXPOSE 8080
-CMD ["varcavia-node", "--port", "8080", "--data-dir", "/app/data"]
+CMD ["varcavia-node", "--data-dir", "/app/data"]

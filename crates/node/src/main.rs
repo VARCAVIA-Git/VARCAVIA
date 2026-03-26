@@ -106,7 +106,11 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
     let state = Arc::new(AppState::new(db, keypair.secret_bytes(), pipeline_config));
 
     // 5. Avvia il NetworkManager TCP
-    let api_port = args.port.unwrap_or(8080);
+    let api_port = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .or(args.port)
+        .unwrap_or(8080);
     let net_port = api_port + 100; // P2P su porta API + 100
     let net_addr = format!("127.0.0.1:{net_port}").parse()?;
     let network_mgr = network::NetworkManager::new(
