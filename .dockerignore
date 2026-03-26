@@ -1,11 +1,7 @@
 target/
 .git/
-*.md
-CONSIGLI/
-python/
+data/
+*.tar.gz
+venv/
+node_modules/
 web/dashboard/node_modules/
-scripts/
-docs/
-tests/
-.env
-*.secret
