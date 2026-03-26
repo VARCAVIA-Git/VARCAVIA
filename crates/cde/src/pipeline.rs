@@ -176,7 +176,7 @@ pub fn extract_claims(text: &str) -> Vec<String> {
     let mut claims = Vec::new();
 
     // Split per frasi (. ! ?)
-    for raw in text.split(|c| c == '.' || c == '!' || c == '?') {
+    for raw in text.split(['.', '!', '?']) {
         let sentence = raw.trim();
         if sentence.len() < 15 {
             continue;
@@ -190,7 +190,7 @@ pub fn extract_claims(text: &str) -> Vec<String> {
         // Contiene un nome proprio? (parola che inizia con maiuscola, non a inizio frase)
         let words: Vec<&str> = sentence.split_whitespace().collect();
         let has_proper_noun = words.iter().skip(1).any(|w| {
-            w.chars().next().map_or(false, |c| c.is_uppercase())
+            w.chars().next().is_some_and(|c| c.is_uppercase())
         });
 
         // Contiene pattern fattuali?

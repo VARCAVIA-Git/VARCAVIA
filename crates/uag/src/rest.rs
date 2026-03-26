@@ -823,23 +823,21 @@ async fn semantic_search(
 
     let mut scored: Vec<(String, String, f64, f64)> = Vec::new(); // (id, content, similarity, score)
 
-    for item in state.db.scan_prefix(PREFIX_DATA) {
-        if let Ok((key, val)) = item {
-            let id = String::from_utf8_lossy(&key[PREFIX_DATA.len()..]).to_string();
-            let content = String::from_utf8_lossy(&val).to_string();
-            let sim = varcavia_cde::dedup::text_similarity(&query, &content);
-            if sim > 0.05 {
-                let info_key = AppState::make_key(PREFIX_INFO, &id);
-                let data_score = state
-                    .db
-                    .get(info_key)
-                    .ok()
-                    .flatten()
-                    .and_then(|b| serde_json::from_slice::<DataInfo>(&b).ok())
-                    .map(|i| i.score)
-                    .unwrap_or(0.0);
-                scored.push((id, content, sim, data_score));
-            }
+    for (key, val) in state.db.scan_prefix(PREFIX_DATA).flatten() {
+        let id = String::from_utf8_lossy(&key[PREFIX_DATA.len()..]).to_string();
+        let content = String::from_utf8_lossy(&val).to_string();
+        let sim = varcavia_cde::dedup::text_similarity(&query, &content);
+        if sim > 0.05 {
+            let info_key = AppState::make_key(PREFIX_INFO, &id);
+            let data_score = state
+                .db
+                .get(info_key)
+                .ok()
+                .flatten()
+                .and_then(|b| serde_json::from_slice::<DataInfo>(&b).ok())
+                .map(|i| i.score)
+                .unwrap_or(0.0);
+            scored.push((id, content, sim, data_score));
         }
     }
 
