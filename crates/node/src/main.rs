@@ -157,11 +157,10 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
         }
     });
 
-    // 8. Auto-seed se il DB è vuoto (es. dopo deploy Railway)
-    if state.data_count() == 0 {
+    // 8. Auto-seed: pulisci dati spazzatura e inserisci seed facts mancanti
+    {
         let seed_state = state.clone();
         tokio::spawn(async move {
-            // Aspetta che il server sia pronto
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
             auto_seed(&seed_state);
         });
@@ -201,51 +200,67 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Popola il DB direttamente via sled + pipeline CDE (no HTTP).
+/// Pulisce dati spazzatura e inserisce seed facts mancanti.
 fn auto_seed(state: &AppState) {
     use varcavia_uag::state::{PREFIX_DATA, PREFIX_DDNA, PREFIX_INFO};
+    use std::collections::HashSet;
 
-    let facts = varcavia_crawler::get_seed_facts();
-    tracing::info!(
-        "DB vuoto rilevato, seeding con {} fatti...",
-        facts.len()
-    );
-
+    let seed_facts = varcavia_crawler::get_seed_facts();
     let keypair = state.keypair();
-    let mut inserted = 0u64;
-    let mut errors = 0u64;
 
-    for (content, domain) in &facts {
+    // Build set of valid content strings from seed facts
+    let valid_contents: HashSet<String> = seed_facts.iter().map(|(c, _)| c.clone()).collect();
+
+    // Step 1: Rimuovi dati non nei seed facts
+    let mut removed = 0u64;
+    let mut to_remove: Vec<String> = Vec::new();
+    for (key, val) in state.db.scan_prefix(PREFIX_DATA).flatten() {
+        let id = String::from_utf8_lossy(&key[PREFIX_DATA.len()..]).to_string();
+        let content = String::from_utf8_lossy(&val).to_string();
+        if !valid_contents.contains(&content) {
+            to_remove.push(id);
+        }
+    }
+    for id in &to_remove {
+        let _ = state.db.remove(AppState::make_key(PREFIX_DATA, id));
+        let _ = state.db.remove(AppState::make_key(PREFIX_DDNA, id));
+        let _ = state.db.remove(AppState::make_key(PREFIX_INFO, id));
+        removed += 1;
+    }
+    if removed > 0 {
+        tracing::info!("Auto-seed: rimossi {} dati non autorizzati", removed);
+    }
+
+    // Step 2: Inserisci seed facts mancanti
+    let mut inserted = 0u64;
+    for (content, domain) in &seed_facts {
         let content_bytes = content.as_bytes();
 
-        // Crea dDNA
         let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
             Ok(d) => d,
-            Err(_) => { errors += 1; continue; }
+            Err(_) => continue,
         };
         let data_id = ddna.id();
+
+        // Gia presente? Skip
+        let data_key = AppState::make_key(PREFIX_DATA, &data_id);
+        if state.db.get(&data_key).ok().flatten().is_some() {
+            continue;
+        }
 
         // Pipeline CDE
         let score = {
             let mut pipeline = state.pipeline.lock().unwrap();
             match pipeline.process(content_bytes, &ddna, domain) {
                 Ok(result) => result.score.overall,
-                Err(_) => { continue; } // duplicato, skip
+                Err(_) => continue,
             }
         };
 
-        // Salva in sled
-        let Ok(ddna_bytes) = ddna.to_bytes() else {
-            errors += 1;
-            continue;
-        };
-
-        let data_key = AppState::make_key(PREFIX_DATA, &data_id);
-        let ddna_key = AppState::make_key(PREFIX_DDNA, &data_id);
-        let info_key = AppState::make_key(PREFIX_INFO, &data_id);
+        let Ok(ddna_bytes) = ddna.to_bytes() else { continue };
 
         let _ = state.db.insert(data_key, content_bytes);
-        let _ = state.db.insert(ddna_key, ddna_bytes.as_slice());
+        let _ = state.db.insert(AppState::make_key(PREFIX_DDNA, &data_id), ddna_bytes.as_slice());
 
         let info = varcavia_uag::rest::DataInfo {
             domain: domain.clone(),
@@ -254,17 +269,17 @@ fn auto_seed(state: &AppState) {
             verification_count: 1,
         };
         if let Ok(j) = serde_json::to_vec(&info) {
-            let _ = state.db.insert(info_key, j);
+            let _ = state.db.insert(AppState::make_key(PREFIX_INFO, &data_id), j);
         }
 
         state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         inserted += 1;
     }
 
+    let total = state.data_count();
     tracing::info!(
-        "Auto-seed completato: {} inseriti, {} errori",
-        inserted,
-        errors
+        "Auto-seed completato: {} inseriti, {} rimossi, {} totali nel DB",
+        inserted, removed, total
     );
 }
 
