@@ -112,7 +112,7 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
         .or(args.port)
         .unwrap_or(8080);
     let net_port = api_port + 100; // P2P su porta API + 100
-    let net_addr = format!("127.0.0.1:{net_port}").parse()?;
+    let net_addr = format!("0.0.0.0:{net_port}").parse()?;
     let network_mgr = network::NetworkManager::new(
         node_id,
         net_addr,
@@ -135,14 +135,14 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
 
     // 7. Avvia il server UAG (Axum)
     let server_config = varcavia_uag::server::ServerConfig {
-        bind_addr: format!("127.0.0.1:{api_port}").parse()?,
+        bind_addr: format!("0.0.0.0:{api_port}").parse()?,
         cors_origins: vec!["http://localhost:5173".into()],
         rate_limit_per_sec: 100,
     };
 
     tracing::info!("Nodo VARCAVIA avviato.");
-    tracing::info!("  API server: http://127.0.0.1:{api_port}");
-    tracing::info!("  P2P network: 127.0.0.1:{net_port}");
+    tracing::info!("  API server: http://0.0.0.0:{api_port}");
+    tracing::info!("  P2P network: 0.0.0.0:{net_port}");
     tracing::info!("  Data dir: {data_dir}");
     tracing::info!("Premi Ctrl+C per terminare.");
 
