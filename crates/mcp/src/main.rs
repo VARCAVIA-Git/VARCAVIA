@@ -1,16 +1,18 @@
 //! # VARCAVIA MCP Server
 //!
-//! Server MCP (Model Context Protocol) minimale che espone il tool `verify_fact`
-//! per permettere a Claude di verificare fatti tramite VARCAVIA.
+//! Server MCP (Model Context Protocol) che espone VARCAVIA come tool per Claude.
+//! Tools: verify_fact, search_facts, submit_fact, get_stats.
 //!
 //! Comunicazione via JSON-RPC su stdin/stdout (standard MCP).
-//! Richiede un nodo VARCAVIA attivo su localhost:8080.
+//! Richiede un nodo VARCAVIA attivo (default: http://127.0.0.1:8080).
 
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 
-/// URL base del nodo VARCAVIA locale.
-const VARCAVIA_API: &str = "http://127.0.0.1:8080";
+fn api_base() -> String {
+    std::env::var("VARCAVIA_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8080".into())
+}
 
 // === JSON-RPC types ===
 
@@ -40,14 +42,12 @@ struct JsonRpcError {
     message: String,
 }
 
-// === MCP protocol types ===
+// === MCP protocol ===
 
 fn server_info() -> serde_json::Value {
     serde_json::json!({
         "protocolVersion": "2024-11-05",
-        "capabilities": {
-            "tools": {}
-        },
+        "capabilities": { "tools": {} },
         "serverInfo": {
             "name": "varcavia",
             "version": env!("CARGO_PKG_VERSION")
@@ -60,7 +60,7 @@ fn tools_list() -> serde_json::Value {
         "tools": [
             {
                 "name": "verify_fact",
-                "description": "Verify a factual claim using VARCAVIA's cryptographic verification protocol. Returns a Data DNA certificate with dual fingerprints (BLAKE3 + SHA3-512), Ed25519 signature, and reliability score.",
+                "description": "Verify a factual claim using VARCAVIA's cryptographic verification protocol. Returns a Data DNA certificate with BLAKE3+SHA3-512 fingerprints, Ed25519 signature, and reliability score. If the fact was already verified, returns the existing record with verification count.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -71,32 +71,90 @@ fn tools_list() -> serde_json::Value {
                     },
                     "required": ["fact"]
                 }
+            },
+            {
+                "name": "search_facts",
+                "description": "Search the VARCAVIA database for facts similar to a query using trigram similarity matching. Returns the most relevant verified facts with their similarity scores.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query (e.g. 'Earth radius', 'water boiling point')"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum results to return (default: 5, max: 20)",
+                            "default": 5
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "submit_fact",
+                "description": "Submit a new factual claim to the VARCAVIA network. The fact will be cryptographically fingerprinted, validated through a 6-stage Clean Data Engine, and stored with a reliability score.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The factual content to submit"
+                        },
+                        "domain": {
+                            "type": "string",
+                            "description": "Knowledge domain (science, geography, health, climate, technology, general)",
+                            "default": "general"
+                        }
+                    },
+                    "required": ["content"]
+                }
+            },
+            {
+                "name": "get_stats",
+                "description": "Get current statistics from the VARCAVIA node including total verified facts, uptime, and network health.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
             }
         ]
     })
 }
 
-/// Chiama l'API VARCAVIA per verificare un fatto.
-async fn call_verify(fact: &str) -> Result<serde_json::Value, String> {
-    let url = format!(
-        "{}/api/v1/verify?fact={}",
-        VARCAVIA_API,
-        urlencoded(fact)
-    );
+// === HTTP client helpers ===
 
-    let client = reqwest::Client::new();
-    let resp = client
+fn client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default()
+}
+
+async fn api_get(path: &str) -> Result<serde_json::Value, String> {
+    let url = format!("{}{path}", api_base());
+    client()
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("Connessione al nodo VARCAVIA fallita: {e}"))?;
-
-    let body = resp
-        .json::<serde_json::Value>()
+        .map_err(|e| format!("Connection failed: {e}"))?
+        .json()
         .await
-        .map_err(|e| format!("Risposta non valida: {e}"))?;
+        .map_err(|e| format!("Invalid response: {e}"))
+}
 
-    Ok(body)
+async fn api_post(path: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let url = format!("{}{path}", api_base());
+    client()
+        .post(&url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("Connection failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Invalid response: {e}"))
 }
 
 /// URL-encode minimale per query string.
@@ -117,42 +175,71 @@ fn urlencoded(s: &str) -> String {
     out
 }
 
-fn make_response(id: serde_json::Value, result: serde_json::Value) -> JsonRpcResponse {
-    JsonRpcResponse {
-        jsonrpc: "2.0".into(),
-        id,
-        result: Some(result),
-        error: None,
+// === Tool dispatch ===
+
+async fn handle_tool(name: &str, args: &serde_json::Value) -> Result<serde_json::Value, String> {
+    match name {
+        "verify_fact" => {
+            let fact = args.get("fact").and_then(|v| v.as_str())
+                .ok_or("Missing 'fact' argument")?;
+            api_get(&format!("/api/v1/verify?fact={}", urlencoded(fact))).await
+        }
+        "search_facts" => {
+            let query = args.get("query").and_then(|v| v.as_str())
+                .ok_or("Missing 'query' argument")?;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5).min(20);
+            api_get(&format!("/api/v1/search?q={}&limit={limit}", urlencoded(query))).await
+        }
+        "submit_fact" => {
+            let content = args.get("content").and_then(|v| v.as_str())
+                .ok_or("Missing 'content' argument")?;
+            let domain = args.get("domain").and_then(|v| v.as_str()).unwrap_or("general");
+            api_post("/api/v1/data", &serde_json::json!({
+                "content": content,
+                "domain": domain,
+                "source": "mcp-claude"
+            })).await
+        }
+        "get_stats" => {
+            let status = api_get("/api/v1/node/status").await?;
+            let metrics = api_get("/api/v1/metrics").await?;
+            let health = api_get("/api/v1/network/health").await?;
+            Ok(serde_json::json!({
+                "node": status,
+                "metrics": metrics,
+                "network": health,
+            }))
+        }
+        _ => Err(format!("Unknown tool: {name}")),
     }
+}
+
+// === Response helpers ===
+
+fn make_response(id: serde_json::Value, result: serde_json::Value) -> JsonRpcResponse {
+    JsonRpcResponse { jsonrpc: "2.0".into(), id, result: Some(result), error: None }
 }
 
 fn make_error(id: serde_json::Value, code: i64, message: String) -> JsonRpcResponse {
-    JsonRpcResponse {
-        jsonrpc: "2.0".into(),
-        id,
-        result: None,
-        error: Some(JsonRpcError { code, message }),
+    JsonRpcResponse { jsonrpc: "2.0".into(), id, result: None, error: Some(JsonRpcError { code, message }) }
+}
+
+fn tool_result(id: serde_json::Value, data: Result<serde_json::Value, String>) -> JsonRpcResponse {
+    match data {
+        Ok(val) => {
+            let text = serde_json::to_string_pretty(&val).unwrap_or_else(|_| "{}".into());
+            make_response(id, serde_json::json!({
+                "content": [{ "type": "text", "text": text }]
+            }))
+        }
+        Err(e) => make_response(id, serde_json::json!({
+            "content": [{ "type": "text", "text": format!("Error: {e}") }],
+            "isError": true
+        })),
     }
 }
 
-fn handle_tools_call(params: &serde_json::Value) -> Result<String, String> {
-    let name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing tool name")?;
-
-    if name != "verify_fact" {
-        return Err(format!("Tool sconosciuto: {name}"));
-    }
-
-    let args = params.get("arguments").unwrap_or(&serde_json::Value::Null);
-    let fact = args
-        .get("fact")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing 'fact' argument")?;
-
-    Ok(fact.to_string())
-}
+// === Main loop ===
 
 #[tokio::main]
 async fn main() {
@@ -168,11 +255,7 @@ async fn main() {
         let req: JsonRpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
-                let resp = make_error(
-                    serde_json::Value::Null,
-                    -32700,
-                    format!("Parse error: {e}"),
-                );
+                let resp = make_error(serde_json::Value::Null, -32700, format!("Parse error: {e}"));
                 let _ = writeln!(stdout, "{}", serde_json::to_string(&resp).unwrap());
                 let _ = stdout.flush();
                 continue;
@@ -183,49 +266,13 @@ async fn main() {
 
         let resp = match req.method.as_str() {
             "initialize" => make_response(id, server_info()),
-
-            "notifications/initialized" => continue, // no response needed
-
+            "notifications/initialized" => continue,
             "tools/list" => make_response(id, tools_list()),
-
             "tools/call" => {
-                match handle_tools_call(&req.params) {
-                    Ok(fact) => {
-                        match call_verify(&fact).await {
-                            Ok(result) => {
-                                // Format as MCP tool result
-                                let text = serde_json::to_string_pretty(&result)
-                                    .unwrap_or_else(|_| "{}".into());
-                                make_response(
-                                    id,
-                                    serde_json::json!({
-                                        "content": [
-                                            {
-                                                "type": "text",
-                                                "text": text
-                                            }
-                                        ]
-                                    }),
-                                )
-                            }
-                            Err(e) => make_response(
-                                id,
-                                serde_json::json!({
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": format!("Error: {e}")
-                                        }
-                                    ],
-                                    "isError": true
-                                }),
-                            ),
-                        }
-                    }
-                    Err(e) => make_error(id, -32602, e),
-                }
+                let name = req.params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let args = req.params.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
+                tool_result(id, handle_tool(name, &args).await)
             }
-
             _ => make_error(id, -32601, format!("Method not found: {}", req.method)),
         };
 
@@ -252,35 +299,15 @@ mod tests {
     }
 
     #[test]
-    fn test_tools_list() {
+    fn test_tools_list_has_four_tools() {
         let list = tools_list();
         let tools = list["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["name"], "verify_fact");
-    }
-
-    #[test]
-    fn test_handle_tools_call_ok() {
-        let params = serde_json::json!({
-            "name": "verify_fact",
-            "arguments": { "fact": "test fact" }
-        });
-        assert_eq!(handle_tools_call(&params).unwrap(), "test fact");
-    }
-
-    #[test]
-    fn test_handle_tools_call_unknown() {
-        let params = serde_json::json!({ "name": "unknown" });
-        assert!(handle_tools_call(&params).is_err());
-    }
-
-    #[test]
-    fn test_handle_tools_call_missing_fact() {
-        let params = serde_json::json!({
-            "name": "verify_fact",
-            "arguments": {}
-        });
-        assert!(handle_tools_call(&params).is_err());
+        assert_eq!(tools.len(), 4);
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"verify_fact"));
+        assert!(names.contains(&"search_facts"));
+        assert!(names.contains(&"submit_fact"));
+        assert!(names.contains(&"get_stats"));
     }
 
     #[test]
@@ -296,5 +323,45 @@ mod tests {
         let resp = make_error(serde_json::json!(1), -32601, "not found".into());
         assert!(resp.result.is_none());
         assert_eq!(resp.error.as_ref().unwrap().code, -32601);
+    }
+
+    #[test]
+    fn test_tool_result_ok() {
+        let resp = tool_result(serde_json::json!(1), Ok(serde_json::json!({"score": 0.9})));
+        let content = resp.result.unwrap();
+        assert!(content["content"][0]["text"].as_str().unwrap().contains("0.9"));
+    }
+
+    #[test]
+    fn test_tool_result_err() {
+        let resp = tool_result(serde_json::json!(1), Err("connection failed".into()));
+        let content = resp.result.unwrap();
+        assert!(content["isError"].as_bool().unwrap());
+        assert!(content["content"][0]["text"].as_str().unwrap().contains("connection failed"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_tool_unknown() {
+        let result = handle_tool("nonexistent", &serde_json::Value::Null).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown tool"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_tool_verify_missing_arg() {
+        let result = handle_tool("verify_fact", &serde_json::json!({})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tool_search_missing_arg() {
+        let result = handle_tool("search_facts", &serde_json::json!({})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_tool_submit_missing_arg() {
+        let result = handle_tool("submit_fact", &serde_json::json!({})).await;
+        assert!(result.is_err());
     }
 }

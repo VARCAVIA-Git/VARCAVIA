@@ -1,0 +1,470 @@
+openapi: 3.0.3
+info:
+  title: VARCAVIA API
+  description: Cryptographic fact verification protocol. Every fact gets a Data DNA with dual fingerprints (BLAKE3 + SHA3-512), Ed25519 signatures, and reliability scoring.
+  version: 0.1.0
+  license:
+    name: AGPL-3.0
+servers:
+  - url: https://varcavia-production.up.railway.app
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - ApiKeyAuth: []
+  - {}
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      tags: [System]
+      responses:
+        '200':
+          description: Node is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: healthy }
+                  uptime_secs: { type: integer }
+                  data_count: { type: integer }
+
+  /api/v1/verify:
+    get:
+      summary: Verify a fact
+      description: Submit a factual claim for cryptographic verification. Returns a Data DNA certificate. If the fact was already verified, returns the existing record with verification count.
+      tags: [Verification]
+      parameters:
+        - name: fact
+          in: query
+          required: true
+          schema: { type: string }
+          example: Earth diameter is 12742 km
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fact: { type: string }
+                  status: { type: string, enum: [verified, already_verified] }
+                  score: { type: number }
+                  duplicate: { type: boolean }
+                  verification_count: { type: integer }
+                  data_dna:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      fingerprint:
+                        type: object
+                        properties:
+                          blake3: { type: string }
+                          sha3_512: { type: string }
+                      source:
+                        type: object
+                        properties:
+                          public_key: { type: string }
+                          reputation: { type: number }
+                      temporal:
+                        type: object
+                        properties:
+                          timestamp_us: { type: integer }
+                      version: { type: integer }
+
+  /api/v1/search:
+    get:
+      summary: Search verified facts
+      description: Search the database using trigram similarity matching.
+      tags: [Search]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          example: Earth radius
+        - name: limit
+          in: query
+          schema: { type: integer, default: 5 }
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query: { type: string }
+                  total: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        content: { type: string }
+                        similarity: { type: number }
+                        score: { type: number }
+
+  /api/v1/data:
+    post:
+      summary: Insert a new fact
+      tags: [Data]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content, domain, source]
+              properties:
+                content: { type: string }
+                domain: { type: string, enum: [science, geography, health, climate, technology, general] }
+                source: { type: string }
+      responses:
+        '201':
+          description: Fact inserted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string }
+                  score: { type: number }
+        '409':
+          description: Duplicate fact
+
+  /api/v1/data/{id}:
+    get:
+      summary: Get a fact by ID
+      tags: [Data]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Fact data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  content: { type: string }
+                  domain: { type: string }
+                  score: { type: number }
+        '404':
+          description: Not found
+    delete:
+      summary: Soft-delete a fact
+      tags: [Data]
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Deleted
+
+  /api/v1/data/{id}/dna:
+    get:
+      summary: Get Data DNA certificate
+      tags: [Data]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Full Data DNA
+
+  /api/v1/data/{id}/score:
+    get:
+      summary: Get reliability score
+      tags: [Data]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Score details
+
+  /api/v1/data/query:
+    post:
+      summary: Query facts by domain
+      tags: [Data]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                domain: { type: string }
+                limit: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: Array of matching facts
+
+  /api/v1/data/verify:
+    post:
+      summary: Verify fact integrity
+      tags: [Data]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+                content: { type: string }
+      responses:
+        '200':
+          description: Verification result
+
+  /api/v1/extract:
+    post:
+      summary: Extract facts from long text
+      description: Splits text into sentences, identifies factual claims, and inserts them.
+      tags: [Extraction]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string }
+                domain: { type: string, default: general }
+      responses:
+        '200':
+          description: Extracted and inserted claims
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  inserted: { type: integer }
+                  claims:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        claim: { type: string }
+                        id: { type: string }
+                        score: { type: number }
+                        status: { type: string }
+
+  /api/v1/batch/verify:
+    post:
+      summary: Batch verify multiple facts
+      description: Verify an array of facts in one request. Enterprise endpoint.
+      tags: [Batch]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [facts]
+              properties:
+                facts:
+                  type: array
+                  items: { type: string }
+            example:
+              facts:
+                - Earth diameter is 12742 km
+                - Water boils at 100 degrees
+                - Mars has 2 moons
+      responses:
+        '200':
+          description: Batch results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        fact: { type: string }
+                        id: { type: string }
+                        blake3: { type: string }
+                        score: { type: number }
+                        duplicate: { type: boolean }
+
+  /api/v1/batch/submit:
+    post:
+      summary: Batch submit multiple facts
+      tags: [Batch]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [content]
+                    properties:
+                      content: { type: string }
+                      domain: { type: string }
+                      source: { type: string }
+      responses:
+        '200':
+          description: Batch insert result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { type: integer }
+                  inserted: { type: integer }
+                  duplicates: { type: integer }
+                  errors: { type: integer }
+
+  /api/v1/translate:
+    post:
+      summary: Translate between formats
+      tags: [Translation]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data, from_format, to_format]
+              properties:
+                data: {}
+                from_format: { type: string, enum: [json, csv, xml] }
+                to_format: { type: string, enum: [json, csv, xml] }
+      responses:
+        '200':
+          description: Translated data
+
+  /api/v1/node/status:
+    get:
+      summary: Node status
+      tags: [Node]
+      responses:
+        '200':
+          description: Node info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node_id: { type: string }
+                  version: { type: string }
+                  status: { type: string }
+                  uptime_secs: { type: integer }
+                  data_count: { type: integer }
+
+  /api/v1/node/peers:
+    get:
+      summary: Connected peers
+      tags: [Node]
+      responses:
+        '200':
+          description: Peer list
+
+  /api/v1/node/stats:
+    get:
+      summary: Node statistics
+      tags: [Node]
+      responses:
+        '200':
+          description: Statistics
+
+  /api/v1/node/consensus/{id}:
+    get:
+      summary: Consensus status for a fact
+      tags: [Node]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Consensus details with vote history
+
+  /api/v1/metrics:
+    get:
+      summary: Operational metrics
+      tags: [System]
+      responses:
+        '200':
+          description: Metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  claims_per_second: { type: number }
+                  total_verifications: { type: integer }
+                  facts_ingested_total: { type: integer }
+                  uptime_hours: { type: number }
+                  storage_bytes: { type: integer }
+
+  /api/v1/stats:
+    get:
+      summary: Public statistics
+      tags: [System]
+      responses:
+        '200':
+          description: Public stats
+
+  /api/v1/network/health:
+    get:
+      summary: Network health
+      tags: [Network]
+      responses:
+        '200':
+          description: Network status
+
+  /api/v1/network/topology:
+    get:
+      summary: Network topology
+      tags: [Network]
+      responses:
+        '200':
+          description: Topology graph
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Optional. If VARCAVIA_API_KEY is set on the server, required for POST/PUT/DELETE. GET endpoints are always public.

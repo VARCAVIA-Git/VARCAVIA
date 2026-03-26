@@ -166,6 +166,13 @@ pub fn search_routes() -> Router<Arc<AppState>> {
         .route("/api/v1/extract", post(extract_facts))
 }
 
+/// Route batch per uso enterprise
+pub fn batch_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/v1/batch/verify", post(batch_verify))
+        .route("/api/v1/batch/submit", post(batch_submit))
+}
+
 /// Route hero per demo pubblica + health + stats
 pub fn hero_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -965,6 +972,154 @@ async fn extract_facts(
 }
 
 /// GET /api/v1/metrics — Metriche operative del nodo.
+/// POST /api/v1/batch/verify — Verifica multipli fatti in parallelo.
+async fn batch_verify(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let facts = match body.get("facts").and_then(|v| v.as_array()) {
+        Some(arr) => arr.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Campo 'facts' (array) mancante"})),
+            );
+        }
+    };
+
+    let mut results = Vec::new();
+    for fact_val in &facts {
+        let fact = match fact_val.as_str() {
+            Some(f) if !f.trim().is_empty() => f.trim(),
+            _ => continue,
+        };
+
+        let content_bytes = fact.as_bytes();
+        let keypair = state.keypair();
+        let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
+            Ok(d) => d,
+            Err(e) => {
+                results.push(serde_json::json!({"fact": fact, "error": e.to_string()}));
+                continue;
+            }
+        };
+
+        let data_id = ddna.id();
+        let fingerprint_blake3 = hex::encode(ddna.fingerprint.blake3);
+
+        let (score, duplicate) = {
+            let mut pipeline = state.pipeline.lock().unwrap();
+            match pipeline.process(content_bytes, &ddna, "general") {
+                Ok(result) => (result.score.overall, false),
+                Err(_) => {
+                    // Duplicato — recupera score esistente
+                    let info_key = AppState::make_key(PREFIX_INFO, &data_id);
+                    let existing_score = state.db.get(&info_key).ok().flatten()
+                        .and_then(|b| serde_json::from_slice::<DataInfo>(&b).ok())
+                        .map(|i| i.score)
+                        .unwrap_or(0.0);
+                    (existing_score, true)
+                }
+            }
+        };
+
+        if !duplicate {
+            state.inc_verifications();
+            state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(ddna_bytes) = ddna.to_bytes() {
+                let _ = state.db.insert(AppState::make_key(PREFIX_DATA, &data_id), content_bytes);
+                let _ = state.db.insert(AppState::make_key(PREFIX_DDNA, &data_id), ddna_bytes.as_slice());
+                let info = DataInfo {
+                    domain: "general".into(),
+                    score,
+                    inserted_at_us: chrono::Utc::now().timestamp_micros(),
+                    verification_count: 1,
+                };
+                if let Ok(j) = serde_json::to_vec(&info) {
+                    let _ = state.db.insert(AppState::make_key(PREFIX_INFO, &data_id), j);
+                }
+            }
+        }
+
+        results.push(serde_json::json!({
+            "fact": fact,
+            "id": data_id,
+            "blake3": fingerprint_blake3,
+            "score": score,
+            "duplicate": duplicate,
+        }));
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({"results": results, "total": results.len()})))
+}
+
+/// POST /api/v1/batch/submit — Inserisce multipli dati in batch.
+async fn batch_submit(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let items = match body.get("items").and_then(|v| v.as_array()) {
+        Some(arr) => arr.clone(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Campo 'items' (array) mancante. Ogni item: {content, domain, source}"})),
+            );
+        }
+    };
+
+    let keypair = state.keypair();
+    let mut inserted = 0u32;
+    let mut duplicates = 0u32;
+    let mut errors = 0u32;
+
+    for item in &items {
+        let content = match item.get("content").and_then(|v| v.as_str()) {
+            Some(c) if !c.trim().is_empty() => c.trim(),
+            _ => { errors += 1; continue; }
+        };
+        let domain = item.get("domain").and_then(|v| v.as_str()).unwrap_or("general");
+        let content_bytes = content.as_bytes();
+
+        let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
+            Ok(d) => d,
+            Err(_) => { errors += 1; continue; }
+        };
+        let data_id = ddna.id();
+
+        let score = {
+            let mut pipeline = state.pipeline.lock().unwrap();
+            match pipeline.process(content_bytes, &ddna, domain) {
+                Ok(result) => result.score.overall,
+                Err(_) => { duplicates += 1; continue; }
+            }
+        };
+
+        if let Ok(ddna_bytes) = ddna.to_bytes() {
+            let _ = state.db.insert(AppState::make_key(PREFIX_DATA, &data_id), content_bytes);
+            let _ = state.db.insert(AppState::make_key(PREFIX_DDNA, &data_id), ddna_bytes.as_slice());
+            let info = DataInfo {
+                domain: domain.to_string(),
+                score,
+                inserted_at_us: chrono::Utc::now().timestamp_micros(),
+                verification_count: 1,
+            };
+            if let Ok(j) = serde_json::to_vec(&info) {
+                let _ = state.db.insert(AppState::make_key(PREFIX_INFO, &data_id), j);
+            }
+        }
+        state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        inserted += 1;
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "total": items.len(),
+        "inserted": inserted,
+        "duplicates": duplicates,
+        "errors": errors,
+    })))
+}
+
 async fn metrics(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let uptime = state.uptime_secs();
     let total_verifications = state.total_verifications.load(std::sync::atomic::Ordering::Relaxed);

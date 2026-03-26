@@ -99,6 +99,42 @@ pub async fn rate_limit_middleware(
     next.run(request).await
 }
 
+/// Middleware per autenticazione API key opzionale.
+/// Se VARCAVIA_API_KEY è impostata, richiede X-API-Key header per POST/PUT/DELETE.
+/// GET rimangono pubblici. Se non configurata, tutto è aperto.
+pub async fn api_key_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Response {
+    let expected = std::env::var("VARCAVIA_API_KEY").ok();
+
+    // Se nessuna API key configurata, tutto è aperto
+    let Some(expected_key) = expected else {
+        return next.run(request).await;
+    };
+
+    if expected_key.is_empty() {
+        return next.run(request).await;
+    }
+
+    // GET e OPTIONS sono sempre pubblici
+    let method = request.method().clone();
+    if method == axum::http::Method::GET || method == axum::http::Method::OPTIONS {
+        return next.run(request).await;
+    }
+
+    // Controlla X-API-Key header
+    let provided = request
+        .headers()
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok());
+
+    match provided {
+        Some(key) if key == expected_key => next.run(request).await,
+        _ => ApiError::unauthorized().into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
