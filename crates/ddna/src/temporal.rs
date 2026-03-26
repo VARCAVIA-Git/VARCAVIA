@@ -37,6 +37,15 @@ impl TemporalProof {
         }
     }
 
+    /// Crea una prova temporale con un timestamp specifico.
+    pub fn with_timestamp(timestamp_us: i64, source: ClockSource, precision_us: u32) -> Self {
+        TemporalProof {
+            timestamp_us,
+            source_clock: source,
+            precision_us,
+        }
+    }
+
     /// Verifica che il timestamp sia plausibile.
     /// Non deve essere nel futuro e non più vecchio di 24 ore (configurabile).
     pub fn verify(&self) -> Result<bool> {
@@ -55,6 +64,12 @@ impl TemporalProof {
             ));
         }
         Ok(true)
+    }
+
+    /// Restituisce l'età del timestamp in secondi.
+    pub fn age_secs(&self) -> f64 {
+        let now_us = Utc::now().timestamp_micros();
+        (now_us - self.timestamp_us) as f64 / 1_000_000.0
     }
 }
 
@@ -77,5 +92,43 @@ mod tests {
             precision_us: 1_000,
         };
         assert!(tp.verify().is_err());
+    }
+
+    #[test]
+    fn test_old_timestamp_fails() {
+        let tp = TemporalProof {
+            timestamp_us: Utc::now().timestamp_micros() - 48 * 3600 * 1_000_000, // 48h ago
+            source_clock: ClockSource::System,
+            precision_us: 1_000,
+        };
+        assert!(tp.verify().is_err());
+    }
+
+    #[test]
+    fn test_age_secs() {
+        let tp = TemporalProof::now();
+        let age = tp.age_secs();
+        assert!(age < 1.0); // Should be very recent
+    }
+
+    #[test]
+    fn test_with_timestamp() {
+        let ts = Utc::now().timestamp_micros();
+        let tp = TemporalProof::with_timestamp(ts, ClockSource::Ntp, 100);
+        assert_eq!(tp.timestamp_us, ts);
+        assert_eq!(tp.source_clock, ClockSource::Ntp);
+        assert_eq!(tp.precision_us, 100);
+    }
+
+    #[test]
+    fn test_clock_source_variants() {
+        for source in [ClockSource::System, ClockSource::Ntp, ClockSource::Gps] {
+            let tp = TemporalProof::with_timestamp(
+                Utc::now().timestamp_micros(),
+                source.clone(),
+                1_000,
+            );
+            assert!(tp.verify().is_ok());
+        }
     }
 }

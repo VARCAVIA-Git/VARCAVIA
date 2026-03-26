@@ -6,9 +6,7 @@ use super::validation::{LocalVote, VoteType};
 pub const DEFAULT_THRESHOLD: f64 = 0.67;
 
 /// Aggrega i voti pesati per reputazione dei validatori.
-pub fn aggregate_votes(votes: &[LocalVote], reputations: &[[u8; 32]; 0]) -> f64 {
-    // Per ora: media semplice della confidence dei voti Approve.
-    // TODO: pesare per reputazione del nodo.
+pub fn aggregate_votes(votes: &[LocalVote]) -> f64 {
     if votes.is_empty() {
         return 0.0;
     }
@@ -45,16 +43,52 @@ mod tests {
     use super::*;
     use crate::validation::{LocalVote, VoteType};
 
+    fn make_vote(vote: VoteType, confidence: f64) -> LocalVote {
+        LocalVote {
+            node_id: [0u8; 32],
+            vote,
+            confidence,
+            checks_passed: vec![],
+            checks_failed: vec![],
+        }
+    }
+
     #[test]
     fn test_all_approve() {
         let votes = vec![
-            LocalVote { node_id: [1u8; 32], vote: VoteType::Approve, confidence: 1.0,
-                checks_passed: vec![], checks_failed: vec![] },
-            LocalVote { node_id: [2u8; 32], vote: VoteType::Approve, confidence: 0.9,
-                checks_passed: vec![], checks_failed: vec![] },
+            make_vote(VoteType::Approve, 1.0),
+            make_vote(VoteType::Approve, 0.9),
         ];
-        let score = aggregate_votes(&votes, &[]);
+        let score = aggregate_votes(&votes);
         assert!(score > DEFAULT_THRESHOLD);
+    }
+
+    #[test]
+    fn test_all_reject() {
+        let votes = vec![
+            make_vote(VoteType::Reject, 1.0),
+            make_vote(VoteType::Reject, 0.8),
+        ];
+        let score = aggregate_votes(&votes);
+        assert!(score < 0.01);
+    }
+
+    #[test]
+    fn test_empty_votes() {
+        let score = aggregate_votes(&[]);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_mixed_votes() {
+        let votes = vec![
+            make_vote(VoteType::Approve, 1.0),
+            make_vote(VoteType::Reject, 1.0),
+            make_vote(VoteType::Abstain, 0.8),
+        ];
+        let score = aggregate_votes(&votes);
+        assert!(score > 0.0);
+        assert!(score < 1.0);
     }
 
     #[test]
@@ -67,5 +101,11 @@ mod tests {
     fn test_outcome_rejected() {
         let result = determine_outcome(0.1, DEFAULT_THRESHOLD);
         assert!(matches!(result, super::super::ValidationResult::Rejected { .. }));
+    }
+
+    #[test]
+    fn test_outcome_uncertain() {
+        let result = determine_outcome(0.5, DEFAULT_THRESHOLD);
+        assert!(matches!(result, super::super::ValidationResult::Uncertain { .. }));
     }
 }

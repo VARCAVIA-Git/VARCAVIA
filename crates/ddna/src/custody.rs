@@ -1,6 +1,7 @@
 //! Chain of Custody — Registro immutabile dei passaggi di un dato.
 
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 use chrono::Utc;
 use crate::identity::KeyPair;
 use crate::{DdnaError, Result};
@@ -28,6 +29,7 @@ pub struct CustodyEntry {
     /// Tipo di azione
     pub action: CustodyAction,
     /// Firma dell'entry da parte del nodo
+    #[serde(with = "BigArray")]
     pub signature: [u8; 64],
 }
 
@@ -109,5 +111,33 @@ mod tests {
     #[test]
     fn test_empty_chain_fails() {
         assert!(verify_chain(&[]).is_err());
+    }
+
+    #[test]
+    fn test_non_created_first_entry_fails() {
+        let kp = KeyPair::generate();
+        let node_id = kp.public_key_bytes();
+        let entry = CustodyEntry::new(&node_id, CustodyAction::Received, &kp).unwrap();
+        assert!(verify_chain(&[entry]).is_err());
+    }
+
+    #[test]
+    fn test_multi_entry_chain() {
+        let kp = KeyPair::generate();
+        let node_id = kp.public_key_bytes();
+        let e1 = CustodyEntry::new_creation(&node_id, &kp).unwrap();
+        let e2 = CustodyEntry::new(&node_id, CustodyAction::Validated, &kp).unwrap();
+        assert!(verify_chain(&[e1, e2]).is_ok());
+    }
+
+    #[test]
+    fn test_all_action_types() {
+        let kp = KeyPair::generate();
+        let node_id = kp.public_key_bytes();
+        for action in [CustodyAction::Created, CustodyAction::Received,
+                       CustodyAction::Validated, CustodyAction::Forwarded] {
+            let entry = CustodyEntry::new(&node_id, action, &kp).unwrap();
+            assert_eq!(entry.node_id, node_id);
+        }
     }
 }

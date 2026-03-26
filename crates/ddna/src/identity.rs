@@ -3,6 +3,7 @@
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey, Signature};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
 use crate::fingerprint::ContentFingerprint;
 use crate::{DdnaError, Result};
@@ -22,6 +23,7 @@ pub struct SourceIdentity {
     /// Chiave pubblica Ed25519 (32 bytes)
     pub public_key: [u8; 32],
     /// Firma del ContentFingerprint (64 bytes)
+    #[serde(with = "BigArray")]
     pub signature: [u8; 64],
     /// Tipo di identità
     pub identity_type: IdentityType,
@@ -139,5 +141,23 @@ mod tests {
         let secret = kp.secret_bytes();
         let kp2 = KeyPair::from_bytes(&secret);
         assert_eq!(kp.public_key_bytes(), kp2.public_key_bytes());
+    }
+
+    #[test]
+    fn test_wrong_fingerprint_fails() {
+        let kp = KeyPair::generate();
+        let fp1 = ContentFingerprint::compute(b"data A");
+        let fp2 = ContentFingerprint::compute(b"data B");
+        let source = SourceIdentity::sign(&fp1, &kp).unwrap();
+        assert!(source.verify(&fp2).is_err());
+    }
+
+    #[test]
+    fn test_default_reputation() {
+        let kp = KeyPair::generate();
+        let fp = ContentFingerprint::compute(b"test");
+        let source = SourceIdentity::sign(&fp, &kp).unwrap();
+        assert_eq!(source.reputation_score, 0.5);
+        assert_eq!(source.identity_type, IdentityType::Pseudonymous);
     }
 }

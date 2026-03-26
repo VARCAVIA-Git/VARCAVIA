@@ -36,7 +36,12 @@ pub enum DdnaError {
 
     /// Hash del contenuto non corrisponde
     #[error("Fingerprint non corrisponde: atteso {expected}, ottenuto {got}")]
-    FingerprintMismatch { expected: String, got: String },
+    FingerprintMismatch {
+        /// Hash atteso
+        expected: String,
+        /// Hash ottenuto
+        got: String,
+    },
 
     /// Timestamp non plausibile
     #[error("Timestamp non valido: {0}")]

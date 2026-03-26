@@ -13,6 +13,7 @@ ed25519-dalek.workspace = true
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde-big-array.workspace = true
 rmp-serde.workspace = true
 chrono.workspace = true
 half.workspace = true

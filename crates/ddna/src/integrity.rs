@@ -1,6 +1,6 @@
 //! Integrity Proof — Hash dell'intero dDNA per auto-verifica.
 
-use crate::{DdnaError, Result};
+use crate::Result;
 
 /// Calcola l'hash di integrità dell'intero dDNA.
 /// Usa BLAKE3 su tutti i campi del dDNA serializzati (escluso integrity_hash stesso).

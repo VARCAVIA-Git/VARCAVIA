@@ -1,6 +1,7 @@
 //! Content Fingerprint — Doppio hash BLAKE3 + SHA3-512 del contenuto.
 
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 use sha3::{Digest, Sha3_512};
 
 /// Impronta digitale del contenuto di un dato.
@@ -11,6 +12,7 @@ pub struct ContentFingerprint {
     /// Hash BLAKE3 (32 bytes) — veloce, usato per lookup
     pub blake3: [u8; 32],
     /// Hash SHA3-512 (64 bytes) — sicuro, usato per verifica crittografica
+    #[serde(with = "BigArray")]
     pub sha3_512: [u8; 64],
     /// Dimensione originale del contenuto in bytes
     pub content_size: u64,
@@ -82,5 +84,19 @@ mod tests {
         let data = b"12345";
         let fp = ContentFingerprint::compute(data);
         assert_eq!(fp.content_size, 5);
+    }
+
+    #[test]
+    fn test_id_hex() {
+        let fp = ContentFingerprint::compute(b"test");
+        let hex_id = fp.id_hex();
+        assert_eq!(hex_id.len(), 64); // 32 bytes = 64 hex chars
+    }
+
+    #[test]
+    fn test_empty_content() {
+        let fp = ContentFingerprint::compute(b"");
+        assert_eq!(fp.content_size, 0);
+        assert!(fp.matches(b""));
     }
 }
