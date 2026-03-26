@@ -154,6 +154,11 @@ pub fn translate_routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/v1/translate", post(translate))
 }
 
+/// Route per /api/v1/metrics
+pub fn metrics_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/api/v1/metrics", get(metrics))
+}
+
 /// Route hero per demo pubblica + health + stats
 pub fn hero_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -752,6 +757,26 @@ async fn hero_verify(
     )
 }
 
+/// GET /api/v1/metrics — Metriche operative del nodo.
+async fn metrics(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let uptime = state.uptime_secs();
+    let total_verifications = state.total_verifications.load(std::sync::atomic::Ordering::Relaxed);
+    let claims_per_second = if uptime > 0 {
+        total_verifications as f64 / uptime as f64
+    } else {
+        0.0
+    };
+    let storage_bytes = state.db.size_on_disk().unwrap_or(0);
+
+    Json(serde_json::json!({
+        "claims_per_second": (claims_per_second * 100.0).round() / 100.0,
+        "avg_consensus_latency_ms": 0.0,
+        "total_verifications": total_verifications,
+        "uptime_hours": (uptime as f64 / 3600.0 * 100.0).round() / 100.0,
+        "storage_bytes": storage_bytes,
+    }))
+}
+
 /// GET /api/v1/stats — Statistiche pubbliche del nodo.
 async fn public_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let peers = state.get_peers().await;
@@ -1181,6 +1206,27 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "already_verified");
         assert_eq!(json["duplicate"], true);
+    }
+
+    #[tokio::test]
+    async fn test_metrics() {
+        let app = test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["claims_per_second"].is_number());
+        assert!(json["total_verifications"].is_number());
+        assert!(json["uptime_hours"].is_number());
+        assert!(json["storage_bytes"].is_number());
     }
 
     #[tokio::test]

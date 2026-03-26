@@ -7,6 +7,7 @@ members = [
     "crates/cde",
     "crates/uag",
     "crates/node",
+    "crates/mcp",
 ]
 
 [workspace.package]

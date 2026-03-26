@@ -79,6 +79,7 @@ impl NetworkManager {
     pub async fn ping_peer(&self, addr: &SocketAddr) -> anyhow::Result<String> {
         let msg = NodeMessage::Ping {
             node_id: self.node_id.clone(),
+            listen_port: Some(self.listen_addr.port()),
         };
         let response = messages::request(addr, &msg).await?;
         if let NodeMessage::Pong { node_id } = response {
@@ -127,14 +128,22 @@ async fn handle_connection(
     let message = messages::recv_msg(stream).await?;
 
     let response = match message {
-        NodeMessage::Ping { node_id: peer_id } => {
+        NodeMessage::Ping { node_id: peer_id, listen_port } => {
+            // Usa la porta di ascolto del peer (se fornita) per poterlo contattare
+            let peer_addr = if let Some(port) = listen_port {
+                SocketAddr::new(addr.ip(), port)
+            } else {
+                addr
+            };
             peers.write().await.insert(
                 peer_id.clone(),
                 PeerInfo {
                     node_id: peer_id,
-                    address: addr,
+                    address: peer_addr,
                 },
             );
+            // Registra anche in AppState per il consenso
+            state.add_peer(peer_addr).await;
             NodeMessage::Pong {
                 node_id: node_id.to_string(),
             }
@@ -362,7 +371,7 @@ mod tests {
         // Ping
         let response = messages::request(
             &addr,
-            &NodeMessage::Ping { node_id: "client".into() },
+            &NodeMessage::Ping { node_id: "client".into(), listen_port: None },
         ).await.unwrap();
         assert!(matches!(response, NodeMessage::Pong { .. }));
     }

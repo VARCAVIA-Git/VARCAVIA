@@ -12,7 +12,11 @@ const MAX_MSG_SIZE: usize = 10 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NodeMessage {
     /// Ping per verificare connettività
-    Ping { node_id: String },
+    Ping {
+        node_id: String,
+        #[serde(default)]
+        listen_port: Option<u16>,
+    },
     /// Risposta al ping
     Pong { node_id: String },
     /// Annuncio di un nuovo dato con il suo dDNA
@@ -95,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_message_serialization() {
-        let msg = NodeMessage::Ping { node_id: "test".into() };
+        let msg = NodeMessage::Ping { node_id: "test".into(), listen_port: None };
         let bytes = serde_json::to_vec(&msg).unwrap();
         let _: NodeMessage = serde_json::from_slice(&bytes).unwrap();
     }
@@ -138,7 +142,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let msg = NodeMessage::Ping { node_id: "test-node".into() };
+        let msg = NodeMessage::Ping { node_id: "test-node".into(), listen_port: None };
         let msg_clone = msg.clone();
 
         let server = tokio::spawn(async move {
@@ -153,7 +157,7 @@ mod tests {
         let response = recv_msg(&mut client).await.unwrap();
 
         match response {
-            NodeMessage::Ping { node_id } => assert_eq!(node_id, "test-node"),
+            NodeMessage::Ping { node_id, .. } => assert_eq!(node_id, "test-node"),
             _ => panic!("wrong type"),
         }
 

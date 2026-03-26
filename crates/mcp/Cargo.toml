@@ -1,0 +1,16 @@
+[package]
+name = "varcavia-mcp"
+description = "MCP server — espone VARCAVIA come tool per Claude"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "varcavia-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

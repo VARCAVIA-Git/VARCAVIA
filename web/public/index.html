@@ -152,6 +152,7 @@
   <div class="tagline">Cryptographic Fact Verification Protocol</div>
   <div class="stats-bar">
     <span>Facts verified: <span class="val" id="statTotal">-</span></span>
+    <span>Data stored: <span class="val" id="statData">-</span></span>
     <span>Uptime: <span class="val" id="statUptime">-</span></span>
     <span>Nodes: <span class="val" id="statNodes">-</span></span>
     <span>Avg score: <span class="val" id="statScore">-</span></span>
@@ -255,15 +256,23 @@ function setFact(t) { input.value = t; input.focus(); }
 // Live stats polling
 async function fetchStats() {
   try {
-    const r = await fetch('/api/v1/stats');
-    if (!r.ok) return;
-    const d = await r.json();
-    document.getElementById('statTotal').textContent = d.total_verifications || 0;
-    const u = d.uptime_secs || 0;
-    const h = Math.floor(u/3600), m = Math.floor((u%3600)/60);
-    document.getElementById('statUptime').textContent = h > 0 ? h+'h '+m+'m' : m+'m';
-    document.getElementById('statNodes').textContent = d.node_count || 1;
-    document.getElementById('statScore').textContent = ((d.avg_score||0)*100).toFixed(0) + '%';
+    const [statsRes, statusRes] = await Promise.all([
+      fetch('/api/v1/stats'),
+      fetch('/api/v1/node/status'),
+    ]);
+    if (statsRes.ok) {
+      const d = await statsRes.json();
+      document.getElementById('statTotal').textContent = d.total_verifications || 0;
+      const u = d.uptime_secs || 0;
+      const h = Math.floor(u/3600), m = Math.floor((u%3600)/60);
+      document.getElementById('statUptime').textContent = h > 0 ? h+'h '+m+'m' : m+'m';
+      document.getElementById('statNodes').textContent = d.node_count || 1;
+      document.getElementById('statScore').textContent = ((d.avg_score||0)*100).toFixed(0) + '%';
+    }
+    if (statusRes.ok) {
+      const s = await statusRes.json();
+      document.getElementById('statData').textContent = s.data_count || 0;
+    }
   } catch(e) {}
 }
 fetchStats();
