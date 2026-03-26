@@ -299,67 +299,119 @@ fn auto_seed(state: &AppState) {
     );
 }
 
-/// Task background: prova a crawlare Wikipedia ogni 30 minuti.
+/// Task background: crawla Wikipedia + Wikidata ogni 6 ore.
 async fn background_crawler(state: Arc<AppState>) {
-    use varcavia_uag::state::{PREFIX_DATA, PREFIX_DDNA, PREFIX_INFO};
-
-    // Aspetta 5 minuti prima del primo ciclo (dopo auto-seed)
+    // Aspetta 5 minuti prima del primo ciclo
     tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
 
     loop {
         tracing::info!("Background crawler: avvio ciclo...");
 
-        let facts = varcavia_crawler::crawl_all().await;
-        let keypair = state.keypair();
-        let mut inserted = 0u64;
+        // Wikipedia facts
+        let wiki_facts = varcavia_crawler::crawl_all().await;
+        let wiki_inserted = ingest_facts(&state, &wiki_facts);
+        tracing::info!("Background crawler: {} nuovi da Wikipedia", wiki_inserted);
 
-        for fact in &facts {
-            let content_bytes = fact.text.as_bytes();
-            let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            let data_id = ddna.id();
+        // Wikidata SPARQL
+        let wd_facts = varcavia_crawler::wikidata::crawl_wikidata().await;
+        let wd_inserted = ingest_facts(&state, &wd_facts);
+        tracing::info!("Background crawler: {} nuovi da Wikidata", wd_inserted);
 
-            let score = {
-                let mut pipeline = state.pipeline.lock().unwrap();
-                match pipeline.process(content_bytes, &ddna, &fact.domain) {
-                    Ok(result) => result.score.overall,
-                    Err(_) => continue, // duplicato, skip
+        let total = state.data_count();
+        tracing::info!(
+            "Background crawler completato: {} totali nel DB",
+            total
+        );
+
+        // Attendi 6 ore
+        tokio::time::sleep(tokio::time::Duration::from_secs(6 * 3600)).await;
+    }
+}
+
+/// Inserisce fatti nel DB con dDNA + TrustRecord T1. Restituisce quanti inseriti.
+fn ingest_facts(state: &AppState, facts: &[varcavia_crawler::ExtractedFact]) -> u64 {
+    use varcavia_uag::state::{PREFIX_DATA, PREFIX_DDNA, PREFIX_INFO, PREFIX_TRUST};
+
+    let keypair = state.keypair();
+    let mut inserted = 0u64;
+
+    for fact in facts {
+        let content_bytes = fact.text.as_bytes();
+        let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let data_id = ddna.id();
+
+        // Gia presente? Aggiungi attestazione se da fonte diversa
+        let data_key = AppState::make_key(PREFIX_DATA, &data_id);
+        if state.db.get(&data_key).ok().flatten().is_some() {
+            // Fatto esiste — aggiungi attestazione dal crawler
+            let trust_key = AppState::make_key(PREFIX_TRUST, &data_id);
+            if let Some(bytes) = state.db.get(&trust_key).ok().flatten() {
+                if let Ok(mut trust) = serde_json::from_slice::<varcavia_uag::trust::TrustRecord>(&bytes) {
+                    let already_attested = trust.attestations.iter()
+                        .any(|a| a.source_pubkey == fact.source);
+                    if !already_attested {
+                        let now = chrono::Utc::now().timestamp_micros();
+                        trust.attestations.push(varcavia_uag::trust::Attestation {
+                            source_pubkey: fact.source.clone(),
+                            domain: fact.domain.clone(),
+                            source_tier: varcavia_uag::trust::SourceTier::PeerReviewed,
+                            timestamp_us: now,
+                        });
+                        trust.last_updated_us = now;
+                        trust.tier = varcavia_uag::trust::compute_tier(&trust, now);
+                        if let Ok(j) = serde_json::to_vec(&trust) {
+                            let _ = state.db.insert(&trust_key, j);
+                        }
+                    }
                 }
-            };
-
-            let Ok(ddna_bytes) = ddna.to_bytes() else { continue };
-
-            let _ = state.db.insert(
-                AppState::make_key(PREFIX_DATA, &data_id),
-                content_bytes,
-            );
-            let _ = state.db.insert(
-                AppState::make_key(PREFIX_DDNA, &data_id),
-                ddna_bytes.as_slice(),
-            );
-
-            let info = varcavia_uag::rest::DataInfo {
-                domain: fact.domain.clone(),
-                score,
-                inserted_at_us: chrono::Utc::now().timestamp_micros(),
-                verification_count: 1,
-            };
-            if let Ok(j) = serde_json::to_vec(&info) {
-                let _ = state.db.insert(
-                    AppState::make_key(PREFIX_INFO, &data_id),
-                    j,
-                );
             }
-
-            state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            inserted += 1;
+            continue;
         }
 
-        tracing::info!("Background crawler: {} nuovi fatti inseriti", inserted);
+        // Nuovo fatto — pipeline CDE
+        let score = {
+            let mut pipeline = state.pipeline.lock().unwrap();
+            match pipeline.process(content_bytes, &ddna, &fact.domain) {
+                Ok(result) => result.score.overall,
+                Err(_) => continue,
+            }
+        };
 
-        // Attendi 30 minuti prima del prossimo ciclo
-        tokio::time::sleep(tokio::time::Duration::from_secs(1800)).await;
+        let Ok(ddna_bytes) = ddna.to_bytes() else { continue };
+
+        let _ = state.db.insert(data_key, content_bytes);
+        let _ = state.db.insert(AppState::make_key(PREFIX_DDNA, &data_id), ddna_bytes.as_slice());
+
+        let info = varcavia_uag::rest::DataInfo {
+            domain: fact.domain.clone(),
+            score,
+            inserted_at_us: chrono::Utc::now().timestamp_micros(),
+            verification_count: 1,
+        };
+        if let Ok(j) = serde_json::to_vec(&info) {
+            let _ = state.db.insert(AppState::make_key(PREFIX_INFO, &data_id), j);
+        }
+
+        // TrustRecord T1
+        let now = chrono::Utc::now().timestamp_micros();
+        let mut trust = varcavia_uag::trust::TrustRecord::new(now);
+        trust.attestations.push(varcavia_uag::trust::Attestation {
+            source_pubkey: fact.source.clone(),
+            domain: fact.domain.clone(),
+            source_tier: varcavia_uag::trust::SourceTier::PeerReviewed,
+            timestamp_us: now,
+        });
+        trust.tier = varcavia_uag::trust::compute_tier(&trust, now);
+        if let Ok(j) = serde_json::to_vec(&trust) {
+            let _ = state.db.insert(AppState::make_key(PREFIX_TRUST, &data_id), j);
+        }
+
+        state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        inserted += 1;
     }
+
+    inserted
 }

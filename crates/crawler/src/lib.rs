@@ -1,7 +1,9 @@
 //! # VARCAVIA Crawler
 //!
-//! Crawler minimale che scarica pagine Wikipedia e ne estrae fatti verificabili.
-//! Usato per popolare il nodo con dati reali prima del lancio pubblico.
+//! Crawler che scarica fatti verificabili da Wikipedia e Wikidata.
+//! Usato per popolare il nodo con dati reali.
+
+pub mod wikidata;
 
 /// Pagine Wikipedia da scaricare per l'estrazione di fatti.
 const WIKI_PAGES: &[(&str, &str)] = &[
