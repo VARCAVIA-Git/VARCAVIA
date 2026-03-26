@@ -156,7 +156,6 @@ pub async fn handle_seed(port: u16) -> anyhow::Result<()> {
     let wd_facts = varcavia_crawler::wikidata::crawl_wikidata().await;
     let wd_total = wd_facts.len();
     let mut wd_inserted = 0u64;
-    let mut wd_duplicates = 0u64;
 
     for (i, fact) in wd_facts.iter().enumerate() {
         let body = serde_json::json!({
@@ -165,15 +164,10 @@ pub async fn handle_seed(port: u16) -> anyhow::Result<()> {
             "source": fact.source,
         });
 
-        match client.post(format!("{base_url}/api/v1/data")).json(&body).send().await {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    wd_inserted += 1;
-                } else if resp.status().as_u16() == 409 {
-                    wd_duplicates += 1;
-                }
+        if let Ok(resp) = client.post(format!("{base_url}/api/v1/data")).json(&body).send().await {
+            if resp.status().is_success() {
+                wd_inserted += 1;
             }
-            Err(_) => {}
         }
 
         if (i + 1) % 100 == 0 || i + 1 == wd_total {

@@ -158,8 +158,8 @@ footer{border-top:1px solid var(--border);padding:36px 20px;text-align:center;co
 
 <div class="hero">
   <div class="logo">\<span>V</span>/</div>
-  <h1>The trust layer the internet never had</h1>
-  <p class="sub">An open protocol for cryptographically verified data. Every fact gets dual fingerprints, Ed25519 signatures, and a reliability score.</p>
+  <h1>The verification layer for the world's data</h1>
+  <p class="sub">An open protocol for cryptographically verified data. Every fact gets dual fingerprints, Ed25519 signatures, and a trust tier.</p>
   <div class="hero-btns">
     <button class="btn-primary" onclick="document.getElementById('demo').scrollIntoView({behavior:'smooth'})">Try the demo</button>
     <a class="btn-ghost" href="https://github.com/VARCAVIA-Git/VARCAVIA/blob/main/docs/ARCHITECTURE.md">Read the spec</a>
@@ -172,6 +172,9 @@ footer{border-top:1px solid var(--border);padding:36px 20px;text-align:center;co
     <div class="stat-item"><div class="stat-val" id="sLatency">-</div><div class="stat-label">Avg latency</div></div>
     <div class="stat-item"><div class="stat-val" id="sUptime">-</div><div class="stat-label">Uptime</div></div>
     <div class="stat-item"><div class="stat-val" id="sScore">-</div><div class="stat-label">Avg score</div></div>
+  </div>
+  <div id="trackLine" style="text-align:center;font-size:12px;color:var(--dim);padding:12px 0 0;display:none">
+    Currently tracking <span style="color:var(--ciano);font-weight:600" id="trackCount">-</span> verified facts across <span style="color:var(--ocra);font-weight:600" id="trackDomains">-</span> domains
   </div>
 
   <!-- Demo -->
@@ -306,6 +309,39 @@ results.forEach(r => console.log(`${r.similarity.toFixed(0)}% match: ${r.content
     </div>
   </section>
 
+  <!-- Trust Tiers -->
+  <section>
+    <h2>Trust tier system</h2>
+    <p style="text-align:center;font-size:12px;color:var(--dim);margin:-20px 0 28px;max-width:600px;margin-left:auto;margin-right:auto">Facts progress through 5 trust tiers based on attestations, source authority, and time. Higher tiers mean more independent verification.</p>
+    <div class="steps" style="grid-template-columns:repeat(5,1fr)">
+      <div class="step" style="padding:18px 10px">
+        <div style="font-size:18px;font-weight:700;color:#666;margin-bottom:8px">T0</div>
+        <h3 style="font-size:11px;color:#666">Unattested</h3>
+        <p>No attestations. Just submitted.</p>
+      </div>
+      <div class="step" style="padding:18px 10px;border-color:var(--ocra)">
+        <div style="font-size:18px;font-weight:700;color:var(--ocra);margin-bottom:8px">T1</div>
+        <h3 style="font-size:11px;color:var(--ocra)">Attested</h3>
+        <p>1+ source, authority &ge;1</p>
+      </div>
+      <div class="step" style="padding:18px 10px;border-color:var(--ciano)">
+        <div style="font-size:18px;font-weight:700;color:var(--ciano);margin-bottom:8px">T2</div>
+        <h3 style="font-size:11px;color:var(--ciano)">Cross-checked</h3>
+        <p>2+ domains, authority &ge;5</p>
+      </div>
+      <div class="step" style="padding:18px 10px;border-color:#b07cff">
+        <div style="font-size:18px;font-weight:700;color:#b07cff;margin-bottom:8px">T3</div>
+        <h3 style="font-size:11px;color:#b07cff">Authoritative</h3>
+        <p>Institutional source, authority &ge;15</p>
+      </div>
+      <div class="step" style="padding:18px 10px;border-color:var(--green)">
+        <div style="font-size:18px;font-weight:700;color:var(--green);margin-bottom:8px">T4</div>
+        <h3 style="font-size:11px;color:var(--green)">Canonical</h3>
+        <p>50+ authority, 7+ days, 0 contradictions</p>
+      </div>
+    </div>
+  </section>
+
   <!-- Protocol primitives -->
   <section>
     <h2>Protocol primitives</h2>
@@ -399,12 +435,18 @@ async function poll(){
     const [sr,mr]=await Promise.all([fetch('/api/v1/node/status'),fetch('/api/v1/stats')]);
     if(sr.ok){
       const s=await sr.json();
-      document.getElementById('sData').textContent=s.data_count||0;
+      const dc=s.data_count||0;
+      document.getElementById('sData').textContent=dc;
       const lat=s.avg_latency_ms;
       document.getElementById('sLatency').textContent=lat>0?lat.toFixed(1)+'ms':'<1ms';
       const u=s.uptime_secs||0;
       const h=Math.floor(u/3600),m=Math.floor((u%3600)/60);
       document.getElementById('sUptime').textContent=h>0?h+'h '+m+'m':m+'m';
+      if(dc>0){
+        document.getElementById('trackCount').textContent=dc;
+        document.getElementById('trackDomains').textContent='7';
+        document.getElementById('trackLine').style.display='block';
+      }
     }
     if(mr.ok){
       const m=await mr.json();
