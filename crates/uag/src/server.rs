@@ -1,6 +1,8 @@
 //! Axum HTTP server per il Universal Access Gateway.
 
 use axum::Router;
+use axum::response::Html;
+use axum::routing::get as get_route;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
@@ -33,10 +35,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .allow_headers(Any);
 
     Router::new()
+        .route("/", get_route(landing_page))
         .merge(rest::data_routes())
         .merge(rest::node_routes())
         .merge(rest::network_routes())
         .merge(rest::translate_routes())
+        .merge(rest::hero_routes())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
@@ -49,6 +53,11 @@ pub async fn run(config: ServerConfig, state: Arc<AppState>) -> anyhow::Result<(
     tracing::info!("UAG server avviato su {}", config.bind_addr);
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Serve la landing page HTML.
+async fn landing_page() -> Html<&'static str> {
+    Html(include_str!("../../../web/public/index.html"))
 }
 
 #[cfg(test)]

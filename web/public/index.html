@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VARCAVIA — Verify Any Fact</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --petrolio: #28516D;
+    --ocra: #D4A11F;
+    --ciano: #1FA1D4;
+    --bg: #0B1622;
+    --surface: #12233A;
+    --text: #C8D6E5;
+    --text-dim: #6B8299;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  header {
+    text-align: center;
+    padding: 60px 20px 40px;
+  }
+  .logo {
+    font-size: 48px;
+    font-weight: 700;
+    color: var(--ciano);
+    letter-spacing: 4px;
+  }
+  .logo span { color: var(--ocra); }
+  .tagline {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-top: 8px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  main {
+    width: 100%;
+    max-width: 720px;
+    padding: 0 20px;
+  }
+  .verify-box {
+    background: var(--surface);
+    border: 1px solid var(--petrolio);
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 32px;
+  }
+  .verify-box h2 {
+    font-size: 16px;
+    color: var(--ocra);
+    margin-bottom: 16px;
+    font-weight: 500;
+  }
+  .input-row {
+    display: flex;
+    gap: 12px;
+  }
+  .input-row input {
+    flex: 1;
+    padding: 14px 16px;
+    background: var(--bg);
+    border: 1px solid var(--petrolio);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .input-row input:focus { border-color: var(--ciano); }
+  .input-row input::placeholder { color: var(--text-dim); }
+  .btn {
+    padding: 14px 28px;
+    background: var(--petrolio);
+    color: white;
+    border: 1px solid var(--ciano);
+    border-radius: 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: var(--ciano); color: var(--bg); }
+  .btn:disabled { opacity: 0.5; cursor: wait; }
+  .result {
+    margin-top: 24px;
+    display: none;
+  }
+  .result.visible { display: block; }
+  .result-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .status-badge {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .status-verified { background: #0d3320; color: #4caf50; border: 1px solid #4caf50; }
+  .status-duplicate { background: #3a2e0d; color: var(--ocra); border: 1px solid var(--ocra); }
+  .status-error { background: #3a1111; color: #ff4444; border: 1px solid #ff4444; }
+  .score-display {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--ciano);
+  }
+  .dna-section {
+    background: var(--bg);
+    border: 1px solid #1a2d42;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 12px;
+  }
+  .dna-section h3 {
+    font-size: 11px;
+    color: var(--ocra);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+  }
+  .dna-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid #1a2d42;
+    font-size: 12px;
+  }
+  .dna-row:last-child { border-bottom: none; }
+  .dna-label { color: var(--text-dim); }
+  .dna-value {
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    word-break: break-all;
+    text-align: right;
+    max-width: 60%;
+  }
+  .fact-display {
+    padding: 12px 16px;
+    background: var(--bg);
+    border-left: 3px solid var(--ciano);
+    font-size: 14px;
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+  footer {
+    margin-top: auto;
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  footer a { color: var(--ciano); text-decoration: none; }
+  .examples {
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .examples span {
+    cursor: pointer;
+    color: var(--ciano);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+  }
+  .examples span:hover { color: var(--ocra); }
+  @media (max-width: 600px) {
+    .input-row { flex-direction: column; }
+    header { padding: 40px 20px 24px; }
+    .logo { font-size: 36px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">\<span>V</span>/</div>
+  <div class="tagline">Decentralized Clean Data Infrastructure</div>
+</header>
+
+<main>
+  <div class="verify-box">
+    <h2>Verify a fact</h2>
+    <div class="input-row">
+      <input type="text" id="factInput" placeholder="Earth diameter is 12742 km" autofocus>
+      <button class="btn" id="verifyBtn" onclick="verifyFact()">Verify</button>
+    </div>
+    <div class="examples">
+      Try:
+      <span onclick="setFact('Earth diameter is 12742 km')">Earth diameter</span> &middot;
+      <span onclick="setFact('Water boils at 100 degrees celsius')">Water boiling point</span> &middot;
+      <span onclick="setFact('Speed of light is 299792458 m/s')">Speed of light</span>
+    </div>
+
+    <div class="result" id="result">
+      <div class="result-header">
+        <span class="status-badge" id="statusBadge"></span>
+        <div class="score-display" id="scoreDisplay"></div>
+      </div>
+      <div class="fact-display" id="factDisplay"></div>
+
+      <div class="dna-section">
+        <h3>Data DNA</h3>
+        <div class="dna-row"><span class="dna-label">ID</span><span class="dna-value" id="dnaId"></span></div>
+        <div class="dna-row"><span class="dna-label">BLAKE3</span><span class="dna-value" id="dnaBlake3"></span></div>
+        <div class="dna-row"><span class="dna-label">SHA3-512</span><span class="dna-value" id="dnaSha3"></span></div>
+        <div class="dna-row"><span class="dna-label">Public Key</span><span class="dna-value" id="dnaPubkey"></span></div>
+        <div class="dna-row"><span class="dna-label">Timestamp</span><span class="dna-value" id="dnaTimestamp"></span></div>
+        <div class="dna-row"><span class="dna-label">Version</span><span class="dna-value" id="dnaVersion"></span></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <strong>VARCAVIA</strong> &mdash; Verifiable Autonomous Registry for Clean, Accessible, Validated &amp; Interlinked Archives<br>
+  <a href="https://github.com/VARCAVIA-Git/VARCAVIA">GitHub</a> &middot; AGPL-3.0
+</footer>
+
+<script>
+const input = document.getElementById('factInput');
+const btn = document.getElementById('verifyBtn');
+const result = document.getElementById('result');
+
+input.addEventListener('keydown', e => { if (e.key === 'Enter') verifyFact(); });
+
+function setFact(text) {
+  input.value = text;
+  input.focus();
+}
+
+async function verifyFact() {
+  const fact = input.value.trim();
+  if (!fact) return;
+
+  btn.disabled = true;
+  btn.textContent = '...';
+
+  try {
+    const res = await fetch(`/api/v1/verify?fact=${encodeURIComponent(fact)}`);
+    const data = await res.json();
+
+    if (data.error) {
+      showError(data.error);
+      return;
+    }
+
+    const dna = data.data_dna;
+    const isDup = data.duplicate;
+
+    document.getElementById('statusBadge').textContent = isDup ? 'Already Verified' : 'Verified';
+    document.getElementById('statusBadge').className = `status-badge ${isDup ? 'status-duplicate' : 'status-verified'}`;
+    document.getElementById('scoreDisplay').textContent = (data.score * 100).toFixed(1) + '%';
+    document.getElementById('factDisplay').textContent = data.fact;
+    document.getElementById('dnaId').textContent = dna.id;
+    document.getElementById('dnaBlake3').textContent = dna.fingerprint.blake3;
+    document.getElementById('dnaSha3').textContent = dna.fingerprint.sha3_512 + '...';
+    document.getElementById('dnaPubkey').textContent = dna.source.public_key.substring(0, 32) + '...';
+    document.getElementById('dnaTimestamp').textContent = new Date(dna.temporal.timestamp_us / 1000).toISOString();
+    document.getElementById('dnaVersion').textContent = 'dDNA v' + dna.version;
+
+    result.classList.add('visible');
+  } catch (e) {
+    showError('Connection failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Verify';
+  }
+}
+
+function showError(msg) {
+  document.getElementById('statusBadge').textContent = 'Error';
+  document.getElementById('statusBadge').className = 'status-badge status-error';
+  document.getElementById('scoreDisplay').textContent = '';
+  document.getElementById('factDisplay').textContent = msg;
+  document.getElementById('dnaId').textContent = '-';
+  document.getElementById('dnaBlake3').textContent = '-';
+  document.getElementById('dnaSha3').textContent = '-';
+  document.getElementById('dnaPubkey').textContent = '-';
+  document.getElementById('dnaTimestamp').textContent = '-';
+  document.getElementById('dnaVersion').textContent = '-';
+  result.classList.add('visible');
+}
+</script>
+</body>
+</html>

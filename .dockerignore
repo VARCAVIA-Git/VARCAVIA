@@ -1,0 +1,11 @@
+target/
+.git/
+*.md
+CONSIGLI/
+python/
+web/dashboard/node_modules/
+scripts/
+docs/
+tests/
+.env
+*.secret

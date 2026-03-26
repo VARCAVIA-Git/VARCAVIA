@@ -1,128 +1,180 @@
-# 🌐 VARCAVIA
+# \V/ VARCAVIA
 
 **Verifiable Autonomous Registry for Clean, Accessible, Validated & Interlinked Archives**
 
-> Sistema Planetario di Dati Puliti — Un'infrastruttura decentralizzata dove ogni dato è pulito per definizione.
-
----
-
-## Il Problema
-
-Il pianeta genera 400+ exabyte di dati al giorno. L'80%+ è duplicato, corrotto, obsoleto o non verificabile. Questo costa 3+ trilioni di dollari/anno in pulizia, riconciliazione e decisioni errate.
-
-## La Soluzione
-
-VARCAVIA è un'infrastruttura peer-to-peer in cui ogni dato che entra viene automaticamente:
-
-- **Verificato** nella fonte (firma crittografica Ed25519)
-- **Certificato** con identità immutabile (Data DNA)
-- **Deduplicato** in tempo reale (hash + LSH + embedding semantici)
-- **Classificato** per dominio e affidabilità (AI distribuita)
-- **Sincronizzato** globalmente in < 200ms (protocollo ARC)
+Decentralized infrastructure where every piece of data is cryptographically verified, deduplicated, and scored for reliability — automatically.
 
 ## Quick Start
 
 ```bash
-# 1. Clona il repository
-git clone https://github.com/varcavia/varcavia.git
-cd varcavia
+# Build
+cargo build --bin varcavia-node
 
-# 2. Setup ambiente (installa Rust, Python, dipendenze)
-bash scripts/setup.sh
+# Run a node
+cargo run --bin varcavia-node -- --port 8080
 
-# 3. Build
-just build
-
-# 4. Inizializza un nodo
-just init
-
-# 5. Avvia in modalità sviluppo
-just dev
-
-# 6. Avvia rete locale di 3 nodi
-just network
+# Verify a fact
+curl "http://localhost:8080/api/v1/verify?fact=Earth+diameter+is+12742+km"
 ```
 
-## Architettura
+## What It Does
+
+Every fact that enters VARCAVIA gets a **Data DNA** — a cryptographic identity that proves:
+
+- **Who** created it (Ed25519 signature)
+- **What** it contains (BLAKE3 + SHA3-512 dual fingerprint)
+- **When** it was created (microsecond-precision timestamp)
+- **How reliable** it is (composite score from 6-stage pipeline)
+
+Duplicate or tampered data is automatically detected and rejected.
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│              VARCAVIA — Stack a 7 Livelli                   │
-├─────────────────────────────────────────────────────────────┤
-│ L7  Universal Access Gateway (REST/GraphQL/gRPC)            │
-│ L6  Predictive Mesh Intelligence (pre-posizionamento AI)    │
-│ L5  Clean Data Engine (pulizia automatica 6 stadi)          │
-│ L4  Adaptive Resonance Consensus (ARC, <200ms)              │
-│ L3  Data DNA Layer (identità crittografica)                 │
-│ L2  VARCAVIA Transport Protocol (VTP)                       │
-│ L1  Physical Mesh Layer (TCP/BLE/LoRa/Satellite)            │
-└─────────────────────────────────────────────────────────────┘
+                    ┌─────────────────────┐
+                    │    REST / GraphQL    │  ← Universal Access Gateway
+                    ├─────────────────────┤
+                    │  Clean Data Engine   │  ← 6-stage purification pipeline
+                    ├─────────────────────┤
+                    │   ARC Consensus      │  ← Distributed validation < 200ms
+                    ├─────────────────────┤
+                    │     Data DNA         │  ← Cryptographic identity layer
+                    ├─────────────────────┤
+                    │  Transport (VTP)     │  ← P2P messaging + CRDT sync
+                    └─────────────────────┘
 ```
 
-## Struttura Progetto
+### Crates
 
-| Directory | Contenuto |
-|-----------|-----------|
-| `crates/ddna` | Data DNA — identità crittografica dei dati |
-| `crates/vtp` | VARCAVIA Transport Protocol |
-| `crates/arc` | Adaptive Resonance Consensus |
-| `crates/cde` | Clean Data Engine (pipeline 6 stadi) |
-| `crates/uag` | Universal Access Gateway (API server) |
-| `crates/node` | Binary principale del nodo |
-| `python/agents` | Micro-agenti AI (dedup, classificazione, anomalie) |
-| `python/cde` | Componenti AI del Clean Data Engine |
-| `configs/` | File di configurazione |
-| `proto/` | Definizioni Protobuf |
+| Crate | Purpose |
+|-------|---------|
+| `ddna` | Data DNA — Ed25519 signatures, BLAKE3+SHA3 fingerprints, custody chain |
+| `vtp` | Transport Protocol — packets, priority queuing, compression, CRDT sync |
+| `arc` | Adaptive Resonance Consensus — committee selection, voting, reputation |
+| `cde` | Clean Data Engine — 6-stage pipeline: dedup, validate, normalize, score |
+| `uag` | Universal Access Gateway — Axum HTTP server, REST API, format translator |
+| `node` | Node binary — wires everything together, storage (sled), P2P networking |
 
-## Stack Tecnologico
+### CDE Pipeline (6 Stages)
 
-- **Rust** — core protocolli, crittografia, networking, API server
-- **Python** — micro-agenti AI, embedding semantici, classificazione
-- **RocksDB** — storage locale embedded
-- **libp2p** — networking peer-to-peer
-- **ONNX Runtime** — inference AI su CPU
-- **Axum** — HTTP server async
+```
+Input → [Hash Dedup] → [LSH Near-Dedup] → [Semantic Dedup] → [Source Validation] → [Normalization] → [Scoring] → Output
+         BLAKE3 O(1)    MinHash O(1)       Trigram Jaccard    Ed25519 verify        VUF + zstd        Composite
+```
 
-## Comandi
+## API Reference
+
+### Hero Endpoint
+
+```
+GET /api/v1/verify?fact=Earth+diameter+is+12742+km
+```
+
+Returns Data DNA + reliability score for any fact. This is the main demo endpoint.
+
+### Data Operations
+
+```
+POST   /api/v1/data              Insert data (creates dDNA, runs CDE pipeline)
+GET    /api/v1/data/:id          Get data by ID (blake3 hex)
+GET    /api/v1/data/:id/dna      Get full Data DNA
+GET    /api/v1/data/:id/score    Get reliability score
+DELETE /api/v1/data/:id          Soft delete
+POST   /api/v1/data/query        Query by domain: {"query":"", "domain":"climate"}
+POST   /api/v1/data/verify       Verify content: {"id":"...", "content":"..."}
+```
+
+### Node & Network
+
+```
+GET    /api/v1/node/status          Node info (uptime, data count, node ID)
+GET    /api/v1/node/peers           Connected peers
+GET    /api/v1/node/stats           Statistics
+GET    /api/v1/node/consensus/:id   Consensus state for a data item
+GET    /api/v1/network/health       Network health
+POST   /api/v1/translate            Format conversion: {"data":..., "from_format":"json", "to_format":"xml"}
+```
+
+### Insert Example
 
 ```bash
-just build          # Compila tutto
-just test           # Esegui test Rust + Python
-just dev            # Avvia nodo di sviluppo
-just network 3      # Avvia rete locale (3 nodi)
-just lint           # Lint Rust + Python
-just fmt            # Formatta tutto
-just doc            # Genera documentazione
-just test-insert    # Inserisci dato di test via API
-just test-status    # Query stato nodo
+curl -X POST http://localhost:8080/api/v1/data \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"Roma: 22°C","domain":"climate","source":"sensor-01"}'
 ```
 
-## Requisiti Hardware Minimi
+Response:
+```json
+{
+  "id": "dcd380ce7fb6b778c7ccba044497321a079f1f57d237d00189877bf66f2867cc",
+  "status": "accepted",
+  "score": 0.73
+}
+```
 
-- **OS**: Ubuntu 22.04+ (o qualsiasi Linux con glibc 2.35+)
-- **RAM**: 8 GB (consigliati 16 GB)
-- **Storage**: 10 GB liberi
-- **CPU**: Qualsiasi x86_64 con 4+ core
-- **GPU**: Non richiesta
-- **Rete**: Localhost per sviluppo, qualsiasi connessione per produzione
+## Multi-Node Network
 
-## Innovazioni Chiave
+```bash
+# Start a 3-node local network
+bash scripts/run_local_network.sh 3
 
-1. **Data DNA (dDNA)** — Identità crittografica multi-livello per ogni dato
-2. **Adaptive Resonance Consensus (ARC)** — Consenso in <200ms senza mining
-3. **Gradient Flow Routing (GFR)** — Routing ispirato alla dinamica dei fluidi
-4. **Clean Data Engine (CDE)** — Pipeline di purificazione a 6 stadi automatica
-5. **Cross-Domain Coherence Check (CDCC)** — Anti-disinformazione cross-dominio
-6. **Predictive Mesh Intelligence (PMI)** — Pre-posizionamento predittivo dei dati
+# Nodes auto-discover peers and replicate data via ARC consensus
+```
 
-## Licenza
+When data is inserted on any node:
+1. The node creates a dDNA and runs the CDE pipeline
+2. It sends a `VoteRequest` to all peers
+3. Peers validate (Ed25519, fingerprint, timestamp) and vote
+4. If consensus score >= 0.67: data is confirmed and replicated
 
-AGPL-3.0 — Il codice è libero, le modifiche devono restare open-source.
+## Docker
 
-## Stato
+```bash
+docker build -t varcavia .
+docker run -p 8080:8080 varcavia
+```
 
-🚧 **In sviluppo attivo — Fase 1 (Proof of Concept)**
+## Web Dashboard
 
----
+```bash
+cd web/dashboard
+npm install
+npm run dev
+# Open http://localhost:5173
+```
 
-*VARCAVIA — Perché i dati puliti sono un diritto, non un privilegio.*
+Real-time monitoring: node status, data table, peer list, insert form.
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Core | Rust 1.78+, Cargo workspace |
+| Crypto | Ed25519 (ed25519-dalek), BLAKE3, SHA3-512 |
+| Storage | sled (embedded KV store) |
+| API | Axum (async HTTP) |
+| Consensus | Custom ARC protocol |
+| Compression | zstd |
+| Dashboard | React + Vite |
+
+## Contributing
+
+```bash
+# Setup
+cargo build --workspace
+
+# Test
+cargo test --workspace
+
+# Lint
+cargo clippy --workspace
+
+# Format
+cargo fmt --all
+```
+
+All contributions must pass `cargo test` and `cargo clippy` with zero errors.
+
+## License
+
+AGPL-3.0 — Modifications must remain open source.

@@ -152,6 +152,11 @@ pub fn translate_routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/v1/translate", post(translate))
 }
 
+/// Route hero per demo pubblica
+pub fn hero_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/api/v1/verify", get(hero_verify))
+}
+
 // === Handlers ===
 
 /// POST /api/v1/data — Inserisci un nuovo dato.
@@ -598,6 +603,138 @@ async fn translate(
     }
 }
 
+/// GET /api/v1/verify?fact=... — Hero endpoint per demo pubblica.
+/// Accetta un fatto come query string, lo inserisce nel sistema,
+/// e restituisce Data DNA + score in un unico response.
+async fn hero_verify(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let fact = match params.get("fact") {
+        Some(f) if !f.trim().is_empty() => f.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Parametro 'fact' mancante. Uso: /api/v1/verify?fact=Earth+diameter+is+12742+km"
+                })),
+            );
+        }
+    };
+
+    let content_bytes = fact.as_bytes();
+    let keypair = state.keypair();
+
+    // Crea dDNA
+    let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("dDNA creation failed: {e}")})),
+            );
+        }
+    };
+
+    let data_id = ddna.id();
+    let fingerprint_blake3 = hex::encode(ddna.fingerprint.blake3);
+    let fingerprint_sha3 = hex::encode(&ddna.fingerprint.sha3_512[..32]); // first 32 bytes hex
+
+    // Pipeline CDE
+    let (score, warnings) = {
+        let mut pipeline = state.pipeline.lock().unwrap();
+        match pipeline.process(content_bytes, &ddna, "general") {
+            Ok(result) => (result.score.overall, result.warnings),
+            Err(e) => {
+                // Se duplicato, recupera lo score esistente
+                let info_key = AppState::make_key(PREFIX_INFO, &data_id);
+                let existing_score = state
+                    .db
+                    .get(&info_key)
+                    .ok()
+                    .flatten()
+                    .and_then(|b| serde_json::from_slice::<DataInfo>(&b).ok())
+                    .map(|i| i.score)
+                    .unwrap_or(0.0);
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "fact": fact,
+                        "status": "already_verified",
+                        "data_dna": {
+                            "id": data_id,
+                            "fingerprint": {
+                                "blake3": fingerprint_blake3,
+                                "sha3_512": fingerprint_sha3,
+                            },
+                            "source": {
+                                "public_key": hex::encode(ddna.source.public_key),
+                                "identity_type": "Pseudonymous",
+                                "reputation": ddna.source.reputation_score,
+                            },
+                            "temporal": {
+                                "timestamp_us": ddna.temporal.timestamp_us,
+                                "clock_source": "System",
+                                "precision_us": ddna.temporal.precision_us,
+                            },
+                            "version": ddna.version,
+                        },
+                        "score": existing_score,
+                        "duplicate": true,
+                        "note": format!("{e}"),
+                    })),
+                );
+            }
+        }
+    };
+
+    // Serializza e salva
+    if let Ok(ddna_bytes) = ddna.to_bytes() {
+        let data_key = AppState::make_key(PREFIX_DATA, &data_id);
+        let ddna_key = AppState::make_key(PREFIX_DDNA, &data_id);
+        let info_key = AppState::make_key(PREFIX_INFO, &data_id);
+        let _ = state.db.insert(data_key, content_bytes);
+        let _ = state.db.insert(ddna_key, ddna_bytes.as_slice());
+        let info = DataInfo {
+            domain: "general".into(),
+            score,
+            inserted_at_us: chrono::Utc::now().timestamp_micros(),
+        };
+        if let Ok(j) = serde_json::to_vec(&info) {
+            let _ = state.db.insert(info_key, j);
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "fact": fact,
+            "status": "verified",
+            "data_dna": {
+                "id": data_id,
+                "fingerprint": {
+                    "blake3": fingerprint_blake3,
+                    "sha3_512": fingerprint_sha3,
+                },
+                "source": {
+                    "public_key": hex::encode(ddna.source.public_key),
+                    "identity_type": "Pseudonymous",
+                    "reputation": ddna.source.reputation_score,
+                },
+                "temporal": {
+                    "timestamp_us": ddna.temporal.timestamp_us,
+                    "clock_source": "System",
+                    "precision_us": ddna.temporal.precision_us,
+                },
+                "version": ddna.version,
+            },
+            "score": score,
+            "warnings": warnings,
+            "duplicate": false,
+        })),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,5 +1083,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_hero_verify() {
+        let app = test_app();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/verify?fact=Earth+diameter+is+12742+km")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["fact"], "Earth diameter is 12742 km");
+        assert_eq!(json["status"], "verified");
+        assert!(json["data_dna"]["id"].as_str().unwrap().len() == 64);
+        assert!(json["score"].as_f64().unwrap() > 0.0);
+        assert_eq!(json["duplicate"], false);
+    }
+
+    #[tokio::test]
+    async fn test_hero_verify_duplicate() {
+        let state = test_state();
+
+        // First call
+        let app1 = crate::server::create_router(state.clone());
+        let r = app1
+            .oneshot(Request::builder().uri("/api/v1/verify?fact=test+fact").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
+        // Second call — same fact → already_verified
+        let app2 = crate::server::create_router(state);
+        let r = app2
+            .oneshot(Request::builder().uri("/api/v1/verify?fact=test+fact").body(Body::empty()).unwrap())
+            .await.unwrap();
+        let body = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "already_verified");
+        assert_eq!(json["duplicate"], true);
+    }
+
+    #[tokio::test]
+    async fn test_hero_verify_missing_param() {
+        let app = test_app();
+        let response = app
+            .oneshot(Request::builder().uri("/api/v1/verify").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
