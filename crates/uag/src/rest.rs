@@ -131,6 +131,13 @@ pub fn data_routes() -> Router<Arc<AppState>> {
         .route("/api/v1/data/:id", get(get_data).delete(delete_data))
         .route("/api/v1/data/:id/dna", get(get_data_dna))
         .route("/api/v1/data/:id/score", get(get_data_score))
+        .route("/api/v1/data/:id/trust", get(get_trust_record))
+        .route("/api/v1/attest/:id", post(attest_fact))
+}
+
+/// Route per /api/v1/stats/tiers
+pub fn trust_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/api/v1/stats/tiers", get(tier_stats))
 }
 
 /// Route per /api/v1/node/*
@@ -726,6 +733,14 @@ async fn hero_verify(
 
         let (related_facts, _) = find_related_facts(&state, &fact);
 
+        // Increment query_count in TrustRecord (verification mining)
+        let mut trust = get_or_create_trust(&state.db, &data_id);
+        trust.query_count += 1;
+        trust.last_updated_us = chrono::Utc::now().timestamp_micros();
+        let tier = crate::trust::compute_tier(&trust, trust.last_updated_us);
+        trust.tier = tier.clone();
+        save_trust(&state.db, &data_id, &trust);
+
         return (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -737,6 +752,12 @@ async fn hero_verify(
                 "domain": domain,
                 "verification_count": vcount,
                 "related_facts": related_facts,
+                "trust": {
+                    "tier": tier.to_string(),
+                    "authority_score": trust.authority_score(),
+                    "attestations_count": trust.attestations.len(),
+                    "demand_signal": trust.query_count,
+                },
             })),
         );
     }
@@ -807,6 +828,113 @@ fn find_related_facts(state: &AppState, query: &str) -> (Vec<serde_json::Value>,
         .collect();
 
     (related, (cross_check_score * 1000.0).round() / 1000.0)
+}
+
+/// Helper: ottiene o crea un TrustRecord per un dato ID.
+fn get_or_create_trust(db: &sled::Db, data_id: &str) -> crate::trust::TrustRecord {
+    use crate::state::PREFIX_TRUST;
+    let key = AppState::make_key(PREFIX_TRUST, data_id);
+    db.get(&key).ok().flatten()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_else(|| crate::trust::TrustRecord::new(chrono::Utc::now().timestamp_micros()))
+}
+
+/// Helper: salva un TrustRecord.
+fn save_trust(db: &sled::Db, data_id: &str, record: &crate::trust::TrustRecord) {
+    use crate::state::PREFIX_TRUST;
+    let key = AppState::make_key(PREFIX_TRUST, data_id);
+    if let Ok(j) = serde_json::to_vec(record) {
+        let _ = db.insert(key, j);
+    }
+}
+
+/// GET /api/v1/data/:id/trust — TrustRecord completo.
+async fn get_trust_record(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Verifica che il dato esista
+    let data_key = AppState::make_key(PREFIX_DATA, &id);
+    if state.db.get(&data_key).ok().flatten().is_none() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Dato non trovato"})));
+    }
+    let record = get_or_create_trust(&state.db, &id);
+    (StatusCode::OK, Json(serde_json::to_value(&record).unwrap_or_default()))
+}
+
+/// POST /api/v1/attest/:id — Aggiungi attestazione a un fatto.
+async fn attest_fact(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Verifica che il dato esista
+    let data_key = AppState::make_key(PREFIX_DATA, &id);
+    if state.db.get(&data_key).ok().flatten().is_none() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Dato non trovato"})));
+    }
+
+    let source = body.get("source").and_then(|v| v.as_str()).unwrap_or("anonymous");
+    let domain = body.get("domain").and_then(|v| v.as_str()).unwrap_or("general");
+    let tier_str = body.get("source_tier").and_then(|v| v.as_str()).unwrap_or("anonymous");
+
+    let now = chrono::Utc::now().timestamp_micros();
+    let attestation = crate::trust::Attestation {
+        source_pubkey: source.into(),
+        domain: domain.into(),
+        source_tier: crate::trust::SourceTier::from_str_loose(tier_str),
+        timestamp_us: now,
+    };
+
+    let mut record = get_or_create_trust(&state.db, &id);
+    record.attestations.push(attestation);
+    record.last_updated_us = now;
+    record.tier = crate::trust::compute_tier(&record, now);
+    save_trust(&state.db, &id, &record);
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "id": id,
+        "tier": record.tier.to_string(),
+        "authority_score": record.authority_score(),
+        "attestations_count": record.attestations.len(),
+    })))
+}
+
+/// GET /api/v1/stats/tiers — Distribuzione dei tier.
+async fn tier_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    use crate::state::PREFIX_TRUST;
+    let now = chrono::Utc::now().timestamp_micros();
+    let mut counts = [0u64; 5]; // T0..T4
+
+    // Count facts with trust records
+    let mut with_trust = 0u64;
+    for (_, val) in state.db.scan_prefix(PREFIX_TRUST).flatten() {
+        if let Ok(record) = serde_json::from_slice::<crate::trust::TrustRecord>(&val) {
+            let tier = crate::trust::compute_tier(&record, now);
+            match tier {
+                crate::trust::VeritTier::T0 => counts[0] += 1,
+                crate::trust::VeritTier::T1 => counts[1] += 1,
+                crate::trust::VeritTier::T2 => counts[2] += 1,
+                crate::trust::VeritTier::T3 => counts[3] += 1,
+                crate::trust::VeritTier::T4 => counts[4] += 1,
+            }
+            with_trust += 1;
+        }
+    }
+
+    // Facts without trust records count as T0
+    let total = state.data_count();
+    let untracked = total.saturating_sub(with_trust);
+    counts[0] += untracked;
+
+    Json(serde_json::json!({
+        "T0": counts[0],
+        "T1": counts[1],
+        "T2": counts[2],
+        "T3": counts[3],
+        "T4": counts[4],
+        "total": total,
+    }))
 }
 
 /// GET /api/v1/search?q=...&limit=5 — Ricerca semantica per similarita trigram.

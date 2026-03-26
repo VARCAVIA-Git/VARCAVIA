@@ -202,7 +202,7 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
 
 /// Pulisce dati spazzatura e inserisce seed facts mancanti.
 fn auto_seed(state: &AppState) {
-    use varcavia_uag::state::{PREFIX_DATA, PREFIX_DDNA, PREFIX_INFO};
+    use varcavia_uag::state::{PREFIX_DATA, PREFIX_DDNA, PREFIX_INFO, PREFIX_TRUST};
     use std::collections::HashSet;
 
     let seed_facts = varcavia_crawler::get_seed_facts();
@@ -225,6 +225,7 @@ fn auto_seed(state: &AppState) {
         let _ = state.db.remove(AppState::make_key(PREFIX_DATA, id));
         let _ = state.db.remove(AppState::make_key(PREFIX_DDNA, id));
         let _ = state.db.remove(AppState::make_key(PREFIX_INFO, id));
+        let _ = state.db.remove(AppState::make_key(PREFIX_TRUST, id));
         removed += 1;
     }
     if removed > 0 {
@@ -272,13 +273,28 @@ fn auto_seed(state: &AppState) {
             let _ = state.db.insert(AppState::make_key(PREFIX_INFO, &data_id), j);
         }
 
+        // Crea TrustRecord T1 con attestazione PeerReviewed dal nodo
+        let now = chrono::Utc::now().timestamp_micros();
+        let mut trust = varcavia_uag::trust::TrustRecord::new(now);
+        trust.attestations.push(varcavia_uag::trust::Attestation {
+            source_pubkey: state.node_id.clone(),
+            domain: domain.clone(),
+            source_tier: varcavia_uag::trust::SourceTier::PeerReviewed,
+            timestamp_us: now,
+        });
+        trust.tier = varcavia_uag::trust::compute_tier(&trust, now);
+        let trust_key = AppState::make_key(PREFIX_TRUST, &data_id);
+        if let Ok(j) = serde_json::to_vec(&trust) {
+            let _ = state.db.insert(trust_key, j);
+        }
+
         state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         inserted += 1;
     }
 
     let total = state.data_count();
     tracing::info!(
-        "Auto-seed completato: {} inseriti, {} rimossi, {} totali nel DB",
+        "Auto-seed completato: {} inseriti, {} rimossi, {} totali nel DB (tutti T1)",
         inserted, removed, total
     );
 }

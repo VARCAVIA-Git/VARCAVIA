@@ -13,6 +13,7 @@ pub const PREFIX_DATA: &[u8] = b"d:";
 pub const PREFIX_DDNA: &[u8] = b"n:";
 pub const PREFIX_INFO: &[u8] = b"i:";
 pub const PREFIX_CONSENSUS: &[u8] = b"c:";
+pub const PREFIX_TRUST: &[u8] = b"t:";
 
 /// Stato condiviso tra tutti gli handler REST.
 pub struct AppState {

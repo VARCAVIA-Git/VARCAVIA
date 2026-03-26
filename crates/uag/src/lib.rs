@@ -12,6 +12,7 @@ pub mod consensus;
 pub mod graphql;
 pub mod translator;
 pub mod middleware;
+pub mod trust;
 
 use thiserror::Error;
 

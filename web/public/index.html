@@ -70,6 +70,13 @@ a:hover{color:var(--ocra)}
 .badge-verified{background:#0d3320;color:var(--green);border:1px solid var(--green)}
 .badge-similar{background:#1a2d42;color:#7cb3ff;border:1px solid #7cb3ff}
 .badge-notfound{background:#1a1a2e;color:var(--dim);border:1px solid #333}
+.tier-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:1px;margin-left:8px}
+.tier-T0{background:#222;color:#666}
+.tier-T1{background:#3a2e0d;color:var(--ocra)}
+.tier-T2{background:#0d2a3d;color:var(--ciano)}
+.tier-T3{background:#1a0d3d;color:#b07cff}
+.tier-T4{background:#0d3320;color:var(--green)}
+.trust-info{font-size:11px;color:var(--dim);margin-top:6px}
 .cert-msg{font-size:11px;color:var(--dim);margin-top:4px;font-style:italic}
 .related-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px}
 .related-box h4{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px}
@@ -193,6 +200,7 @@ footer{border-top:1px solid var(--border);padding:36px 20px;text-align:center;co
             <div class="score-big" id="vScore"></div>
           </div>
           <div class="cert-msg" id="vMsg"></div>
+          <div class="trust-info" id="vTrust" style="display:none"></div>
           <div class="fact-bar" id="vFact" style="margin-top:10px"></div>
           <div id="vRelated" class="related-box" style="display:none"><h4>Related facts in the network</h4><div id="vRelatedList"></div></div>
           <div class="dna-box">
@@ -438,6 +446,15 @@ async function doVerify(){
     }
 
     document.getElementById('vFact').textContent=d.fact;
+
+    // Trust tier info
+    const trustEl=document.getElementById('vTrust');
+    if(d.trust){
+      const t=d.trust;
+      const tierClass='tier-'+t.tier;
+      trustEl.innerHTML='<span class="tier-badge '+tierClass+'">'+t.tier+'</span> Attested by '+t.attestations_count+' source'+(t.attestations_count!==1?'s':'')+' (authority: '+t.authority_score.toFixed(0)+') &middot; Queried '+t.demand_signal+' time'+(t.demand_signal!==1?'s':'');
+      trustEl.style.display='block';
+    }else{trustEl.style.display='none'}
 
     // Related facts
     const relEl=document.getElementById('vRelated');
