@@ -32,6 +32,10 @@ pub struct AppState {
     pub total_verifications: AtomicU64,
     /// Contatore fatti inseriti dall'avvio (atomico)
     pub facts_ingested: AtomicU64,
+    /// Somma latenze richieste in microsecondi (per calcolo media)
+    pub latency_sum_us: AtomicU64,
+    /// Contatore richieste per media latenza
+    pub latency_count: AtomicU64,
 }
 
 impl AppState {
@@ -48,6 +52,8 @@ impl AppState {
             peer_addrs: RwLock::new(Vec::new()),
             total_verifications: AtomicU64::new(0),
             facts_ingested: AtomicU64::new(0),
+            latency_sum_us: AtomicU64::new(0),
+            latency_count: AtomicU64::new(0),
         }
     }
 
@@ -77,6 +83,20 @@ impl AppState {
         key.extend_from_slice(prefix);
         key.extend_from_slice(id.as_bytes());
         key
+    }
+
+    /// Registra la latenza di una richiesta e restituisce la media in ms.
+    pub fn record_latency_us(&self, us: u64) {
+        self.latency_sum_us.fetch_add(us, Ordering::Relaxed);
+        self.latency_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Media latenza in millisecondi.
+    pub fn avg_latency_ms(&self) -> f64 {
+        let count = self.latency_count.load(Ordering::Relaxed);
+        if count == 0 { return 0.0; }
+        let sum = self.latency_sum_us.load(Ordering::Relaxed);
+        (sum as f64 / count as f64) / 1000.0
     }
 
     /// Aggiunge un peer address.

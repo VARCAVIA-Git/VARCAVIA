@@ -99,6 +99,19 @@ pub async fn rate_limit_middleware(
     next.run(request).await
 }
 
+/// Middleware per tracciare la latenza delle richieste.
+pub async fn latency_middleware(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Response {
+    let start = std::time::Instant::now();
+    let response = next.run(request).await;
+    let elapsed_us = start.elapsed().as_micros() as u64;
+    state.record_latency_us(elapsed_us);
+    response
+}
+
 /// Middleware per autenticazione API key opzionale.
 /// Se VARCAVIA_API_KEY è impostata, richiede X-API-Key header per POST/PUT/DELETE.
 /// GET rimangono pubblici. Se non configurata, tutto è aperto.

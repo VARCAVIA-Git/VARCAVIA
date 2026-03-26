@@ -515,14 +515,15 @@ async fn verify_data(
 }
 
 /// GET /api/v1/node/status — Stato reale del nodo.
-async fn node_status(State(state): State<Arc<AppState>>) -> Json<NodeStatusResponse> {
-    Json(NodeStatusResponse {
-        node_id: state.node_id.clone(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        status: "running".into(),
-        uptime_secs: state.uptime_secs(),
-        data_count: state.data_count(),
-    })
+async fn node_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "node_id": state.node_id,
+        "version": env!("CARGO_PKG_VERSION"),
+        "status": "running",
+        "uptime_secs": state.uptime_secs(),
+        "data_count": state.data_count(),
+        "avg_latency_ms": (state.avg_latency_ms() * 100.0).round() / 100.0,
+    }))
 }
 
 /// GET /api/v1/node/peers — Lista peer reale da AppState.
@@ -1134,7 +1135,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
 
     Json(serde_json::json!({
         "claims_per_second": (claims_per_second * 100.0).round() / 100.0,
-        "avg_consensus_latency_ms": 0.0,
+        "avg_latency_ms": (state.avg_latency_ms() * 100.0).round() / 100.0,
         "total_verifications": total_verifications,
         "facts_ingested_total": facts_ingested,
         "uptime_hours": (uptime as f64 / 3600.0 * 100.0).round() / 100.0,

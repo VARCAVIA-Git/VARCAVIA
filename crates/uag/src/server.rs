@@ -57,6 +57,10 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .merge(rest::hero_routes())
         .layer(axum_mw::from_fn(middleware::api_key_middleware))
         .layer(axum_mw::from_fn_with_state(
+            state.clone(),
+            middleware::latency_middleware,
+        ))
+        .layer(axum_mw::from_fn_with_state(
             limiter,
             middleware::rate_limit_middleware,
         ))
