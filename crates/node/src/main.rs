@@ -167,6 +167,14 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
         });
     }
 
+    // 9. Avvia crawler background (ogni 30 minuti)
+    {
+        let crawler_state = state.clone();
+        tokio::spawn(async move {
+            background_crawler(crawler_state).await;
+        });
+    }
+
     // Aspetta Ctrl+C, poi graceful shutdown con timeout 5s
     tokio::signal::ctrl_c().await?;
     tracing::info!("Shutdown in corso (max 5s)...");
@@ -249,6 +257,7 @@ fn auto_seed(state: &AppState) {
             let _ = state.db.insert(info_key, j);
         }
 
+        state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         inserted += 1;
     }
 
@@ -257,4 +266,69 @@ fn auto_seed(state: &AppState) {
         inserted,
         errors
     );
+}
+
+/// Task background: prova a crawlare Wikipedia ogni 30 minuti.
+async fn background_crawler(state: Arc<AppState>) {
+    use varcavia_uag::state::{PREFIX_DATA, PREFIX_DDNA, PREFIX_INFO};
+
+    // Aspetta 5 minuti prima del primo ciclo (dopo auto-seed)
+    tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+
+    loop {
+        tracing::info!("Background crawler: avvio ciclo...");
+
+        let facts = varcavia_crawler::crawl_all().await;
+        let keypair = state.keypair();
+        let mut inserted = 0u64;
+
+        for fact in &facts {
+            let content_bytes = fact.text.as_bytes();
+            let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let data_id = ddna.id();
+
+            let score = {
+                let mut pipeline = state.pipeline.lock().unwrap();
+                match pipeline.process(content_bytes, &ddna, &fact.domain) {
+                    Ok(result) => result.score.overall,
+                    Err(_) => continue, // duplicato, skip
+                }
+            };
+
+            let Ok(ddna_bytes) = ddna.to_bytes() else { continue };
+
+            let _ = state.db.insert(
+                AppState::make_key(PREFIX_DATA, &data_id),
+                content_bytes,
+            );
+            let _ = state.db.insert(
+                AppState::make_key(PREFIX_DDNA, &data_id),
+                ddna_bytes.as_slice(),
+            );
+
+            let info = varcavia_uag::rest::DataInfo {
+                domain: fact.domain.clone(),
+                score,
+                inserted_at_us: chrono::Utc::now().timestamp_micros(),
+                verification_count: 1,
+            };
+            if let Ok(j) = serde_json::to_vec(&info) {
+                let _ = state.db.insert(
+                    AppState::make_key(PREFIX_INFO, &data_id),
+                    j,
+                );
+            }
+
+            state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            inserted += 1;
+        }
+
+        tracing::info!("Background crawler: {} nuovi fatti inseriti", inserted);
+
+        // Attendi 30 minuti prima del prossimo ciclo
+        tokio::time::sleep(tokio::time::Duration::from_secs(1800)).await;
+    }
 }

@@ -30,6 +30,8 @@ pub struct AppState {
     pub peer_addrs: RwLock<Vec<SocketAddr>>,
     /// Contatore totale verifiche (atomico, lock-free)
     pub total_verifications: AtomicU64,
+    /// Contatore fatti inseriti dall'avvio (atomico)
+    pub facts_ingested: AtomicU64,
 }
 
 impl AppState {
@@ -45,6 +47,7 @@ impl AppState {
             started_at: Instant::now(),
             peer_addrs: RwLock::new(Vec::new()),
             total_verifications: AtomicU64::new(0),
+            facts_ingested: AtomicU64::new(0),
         }
     }
 

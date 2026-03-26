@@ -252,6 +252,7 @@ async fn insert_data(
         let _ = state.db.insert(info_key, info_json);
     }
 
+    state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     tracing::info!("Dato inserito: {} (score: {score:.2})", data_id);
 
     // 5. Avvia consenso distribuito in background (non blocca la risposta)
@@ -754,6 +755,7 @@ async fn hero_verify(
 
     // Serializza e salva
     state.inc_verifications();
+    state.facts_ingested.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if let Ok(ddna_bytes) = ddna.to_bytes() {
         let data_key = AppState::make_key(PREFIX_DATA, &data_id);
         let ddna_key = AppState::make_key(PREFIX_DDNA, &data_id);
@@ -973,10 +975,13 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
     };
     let storage_bytes = state.db.size_on_disk().unwrap_or(0);
 
+    let facts_ingested = state.facts_ingested.load(std::sync::atomic::Ordering::Relaxed);
+
     Json(serde_json::json!({
         "claims_per_second": (claims_per_second * 100.0).round() / 100.0,
         "avg_consensus_latency_ms": 0.0,
         "total_verifications": total_verifications,
+        "facts_ingested_total": facts_ingested,
         "uptime_hours": (uptime as f64 / 3600.0 * 100.0).round() / 100.0,
         "storage_bytes": storage_bytes,
     }))

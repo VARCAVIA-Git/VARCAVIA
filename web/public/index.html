@@ -173,9 +173,11 @@
 <header>
   <div class="logo">\<span>V</span>/</div>
   <div class="tagline">Cryptographic Fact Verification Protocol</div>
+  <div id="factsHero" style="margin-top:16px;font-size:20px;color:var(--ciano);font-weight:600;display:none">
+    <span id="factsHeroCount">-</span> verified facts <span style="font-size:14px;color:var(--text-dim);font-weight:400">and growing</span>
+  </div>
   <div class="stats-bar">
-    <span>Facts verified: <span class="val" id="statTotal">-</span></span>
-    <span>Data stored: <span class="val" id="statData">-</span></span>
+    <span>Verifications: <span class="val" id="statTotal">-</span></span>
     <span>Uptime: <span class="val" id="statUptime">-</span></span>
     <span>Nodes: <span class="val" id="statNodes">-</span></span>
     <span>Avg score: <span class="val" id="statScore">-</span></span>
@@ -363,7 +365,11 @@ async function fetchStats() {
     }
     if (statusRes.ok) {
       const s = await statusRes.json();
-      document.getElementById('statData').textContent = s.data_count || 0;
+      const count = s.data_count || 0;
+      if (count > 0) {
+        document.getElementById('factsHeroCount').textContent = count + '+';
+        document.getElementById('factsHero').style.display = 'block';
+      }
     }
   } catch(e) {}
 }
