@@ -2,6 +2,9 @@
 
 **Verifiable Autonomous Registry for Clean, Accessible, Validated & Interlinked Archives**
 
+> **Live demo:** https://varcavia-production.up.railway.app
+> **Protocol spec:** [docs/VERITPROTOCOL.md](docs/VERITPROTOCOL.md)
+
 Decentralized infrastructure where every piece of data is cryptographically verified, deduplicated, and scored for reliability — automatically.
 
 ## Quick Start
