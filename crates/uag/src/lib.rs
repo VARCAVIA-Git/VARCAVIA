@@ -5,6 +5,7 @@
 
 #![deny(clippy::all)]
 
+pub mod state;
 pub mod server;
 pub mod rest;
 pub mod graphql;

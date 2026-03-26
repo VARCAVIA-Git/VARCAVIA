@@ -4,7 +4,11 @@
 //! Integra tutti i componenti: dDNA, VTP, ARC, CDE, UAG.
 
 use clap::Parser;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
+use varcavia_cde::pipeline::PipelineConfig;
+use varcavia_ddna::identity::KeyPair;
+use varcavia_uag::state::AppState;
 
 mod config;
 mod storage;
@@ -18,6 +22,10 @@ struct Args {
     /// Path al file di configurazione
     #[arg(short, long, default_value = "configs/node_default.toml")]
     config: String,
+
+    /// Directory per i dati del nodo
+    #[arg(short, long, default_value = "~/varcavia-data")]
+    data_dir: String,
 
     /// Porta di ascolto (override config)
     #[arg(short, long)]
@@ -44,7 +52,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     tracing::info!("VARCAVIA Node v{}", env!("CARGO_PKG_VERSION"));
-    tracing::info!("Config: {}", args.config);
 
     match args.command {
         Some(cli::Commands::Init { data_dir }) => {
@@ -54,13 +61,83 @@ async fn main() -> anyhow::Result<()> {
             cli::handle_status().await?;
         }
         None => {
-            tracing::info!("Avvio nodo VARCAVIA...");
-            // TODO: avvio completo del nodo
-            tracing::info!("Nodo avviato. Premi Ctrl+C per terminare.");
-            tokio::signal::ctrl_c().await?;
-            tracing::info!("Shutdown in corso...");
+            run_node(args).await?;
         }
     }
 
+    Ok(())
+}
+
+/// Avvia il nodo completo: storage + network + API server.
+async fn run_node(args: Args) -> anyhow::Result<()> {
+    let data_dir = shellexpand::tilde(&args.data_dir).to_string();
+    std::fs::create_dir_all(&data_dir)?;
+
+    // 1. Apri (o crea) il database sled
+    let db_path = format!("{data_dir}/db");
+    let db = sled::open(&db_path)?;
+    tracing::info!("Storage aperto: {}", db_path);
+
+    // 2. Carica o genera keypair del nodo
+    let key_path = format!("{data_dir}/node_key.secret");
+    let keypair = if std::path::Path::new(&key_path).exists() {
+        let secret_bytes = std::fs::read(&key_path)?;
+        let secret: [u8; 32] = secret_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("Chiave privata corrotta (attesi 32 bytes)"))?;
+        KeyPair::from_bytes(&secret)
+    } else {
+        let kp = KeyPair::generate();
+        std::fs::write(&key_path, kp.secret_bytes())?;
+        tracing::info!("Nuova chiave generata e salvata in: {}", key_path);
+        kp
+    };
+    let node_id = hex::encode(keypair.public_key_bytes());
+    tracing::info!("Node ID: {}", node_id);
+
+    // 3. Crea la pipeline CDE
+    let pipeline_config = PipelineConfig::default();
+
+    // 4. Crea lo stato condiviso
+    let state = Arc::new(AppState::new(db, keypair.secret_bytes(), pipeline_config));
+
+    // 5. Avvia il NetworkManager TCP
+    let api_port = args.port.unwrap_or(8080);
+    let net_port = api_port + 100; // P2P su porta API + 100
+    let net_addr = format!("127.0.0.1:{net_port}").parse()?;
+    let network = network::NetworkManager::new(node_id, net_addr);
+    network.start_listener().await?;
+
+    // 6. Avvia il server UAG (Axum)
+    let server_config = varcavia_uag::server::ServerConfig {
+        bind_addr: format!("127.0.0.1:{api_port}").parse()?,
+        cors_origins: vec!["http://localhost:5173".into()],
+    };
+
+    tracing::info!("Nodo VARCAVIA avviato.");
+    tracing::info!("  API server: http://127.0.0.1:{api_port}");
+    tracing::info!("  P2P network: 127.0.0.1:{net_port}");
+    tracing::info!("  Data dir: {data_dir}");
+    tracing::info!("Premi Ctrl+C per terminare.");
+
+    // Avvia server HTTP (bloccante) con graceful shutdown
+    let server_state = state.clone();
+    let server_handle = tokio::spawn(async move {
+        if let Err(e) = varcavia_uag::server::run(server_config, server_state).await {
+            tracing::error!("Errore server UAG: {}", e);
+        }
+    });
+
+    // Aspetta Ctrl+C
+    tokio::signal::ctrl_c().await?;
+    tracing::info!("Shutdown in corso...");
+    server_handle.abort();
+
+    // Flush storage
+    if let Err(e) = state.db.flush() {
+        tracing::warn!("Errore flush storage: {}", e);
+    }
+
+    tracing::info!("Nodo terminato.");
     Ok(())
 }

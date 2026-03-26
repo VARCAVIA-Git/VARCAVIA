@@ -2,10 +2,12 @@
 
 use axum::Router;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::rest;
+use crate::state::AppState;
 
 /// Configurazione del server UAG.
 #[derive(Debug, Clone)]
@@ -23,8 +25,8 @@ impl Default for ServerConfig {
     }
 }
 
-/// Crea il router Axum con tutti gli endpoint configurati.
-pub fn create_router() -> Router {
+/// Crea il router Axum con tutti gli endpoint e lo stato condiviso.
+pub fn create_router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -37,11 +39,12 @@ pub fn create_router() -> Router {
         .merge(rest::translate_routes())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
+        .with_state(state)
 }
 
-/// Avvia il server HTTP.
-pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
-    let app = create_router();
+/// Avvia il server HTTP con lo stato condiviso.
+pub async fn run(config: ServerConfig, state: Arc<AppState>) -> anyhow::Result<()> {
+    let app = create_router(state);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!("UAG server avviato su {}", config.bind_addr);
     axum::serve(listener, app).await?;
@@ -51,6 +54,14 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use varcavia_cde::pipeline::PipelineConfig;
+    use varcavia_ddna::identity::KeyPair;
+
+    fn test_state() -> Arc<AppState> {
+        let db = sled::Config::new().temporary(true).open().unwrap();
+        let kp = KeyPair::generate();
+        Arc::new(AppState::new(db, kp.secret_bytes(), PipelineConfig::default()))
+    }
 
     #[test]
     fn test_default_config() {
@@ -60,8 +71,8 @@ mod tests {
 
     #[test]
     fn test_create_router() {
-        let _router = create_router();
-        // Il router si crea senza panic
+        let state = test_state();
+        let _router = create_router(state);
     }
 
     #[test]
