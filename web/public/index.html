@@ -494,7 +494,13 @@ async function doVerify(){
     if(d.trust){
       const t=d.trust;
       const tierClass='tier-'+t.tier;
-      trustEl.innerHTML='<span class="tier-badge '+tierClass+'">'+t.tier+'</span> Attested by '+t.attestations_count+' source'+(t.attestations_count!==1?'s':'')+' (authority: '+t.authority_score.toFixed(0)+') &middot; Queried '+t.demand_signal+' time'+(t.demand_signal!==1?'s':'');
+      const indep=t.effective_independent_sources||0;
+      const attest=t.attestations||0;
+      trustEl.innerHTML='<span class="tier-badge '+tierClass+'">'+t.tier+' '+t.tier_label+'</span> '+
+        attest+' attestation'+(attest!==1?'s':'')+' ('+indep.toFixed(1)+' independent) &middot; '+
+        'Authority: '+t.authority_score.toFixed(0)+' &middot; '+
+        'Queried '+t.demand_signal+' time'+(t.demand_signal!==1?'s':'')+
+        (t.contradictions>0?' &middot; <span style="color:#ff4444">'+t.contradictions+' contradiction'+(t.contradictions!==1?'s':'')+'</span>':'');
       trustEl.style.display='block';
     }else{trustEl.style.display='none'}
 

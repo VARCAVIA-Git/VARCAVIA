@@ -754,9 +754,13 @@ async fn hero_verify(
                 "related_facts": related_facts,
                 "trust": {
                     "tier": tier.to_string(),
+                    "tier_label": crate::trust::tier_label(&tier),
                     "authority_score": trust.authority_score(),
-                    "attestations_count": trust.attestations.len(),
+                    "attestations": trust.attestations.len(),
+                    "effective_independent_sources": crate::trust::compute_independence(&trust.attestations),
                     "demand_signal": trust.query_count,
+                    "contradictions": trust.contradictions.len(),
+                    "source_breakdown": trust.source_breakdown(),
                 },
             })),
         );

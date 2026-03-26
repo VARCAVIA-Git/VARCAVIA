@@ -77,6 +77,31 @@ impl TrustRecord {
         let elapsed_us = now_us.saturating_sub(self.first_seen_us);
         elapsed_us as f64 / (86400.0 * 1_000_000.0)
     }
+
+    /// Conta attestazioni per tipo di fonte.
+    pub fn source_breakdown(&self) -> SourceBreakdown {
+        let mut b = SourceBreakdown::default();
+        for a in &self.attestations {
+            match a.source_tier {
+                SourceTier::Institutional => b.institutional += 1,
+                SourceTier::PeerReviewed => b.peer_reviewed += 1,
+                SourceTier::MainstreamMedia => b.mainstream_media += 1,
+                SourceTier::Website => b.website += 1,
+                SourceTier::Anonymous => b.anonymous += 1,
+            }
+        }
+        b
+    }
+}
+
+/// Breakdown delle fonti per tipo.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SourceBreakdown {
+    pub institutional: u32,
+    pub peer_reviewed: u32,
+    pub mainstream_media: u32,
+    pub website: u32,
+    pub anonymous: u32,
 }
 
 /// Attestazione da una fonte.
@@ -128,6 +153,120 @@ pub struct Contradiction {
     pub description: String,
     pub source_pubkey: String,
     pub timestamp_us: i64,
+}
+
+/// Etichetta human-readable per ogni tier.
+pub fn tier_label(tier: &VeritTier) -> &'static str {
+    match tier {
+        VeritTier::T0 => "Unattested",
+        VeritTier::T1 => "Attested",
+        VeritTier::T2 => "Corroborated",
+        VeritTier::T3 => "Authoritative",
+        VeritTier::T4 => "Canonical",
+    }
+}
+
+/// Calcola il numero effettivo di fonti indipendenti.
+/// Fonti dallo stesso dominio contribuiscono 0.3, da domini diversi 1.0.
+pub fn compute_independence(attestations: &[Attestation]) -> f64 {
+    if attestations.is_empty() {
+        return 0.0;
+    }
+    if attestations.len() == 1 {
+        return 1.0;
+    }
+
+    let mut total = 0.0;
+    let mut counted = vec![false; attestations.len()];
+
+    for i in 0..attestations.len() {
+        if counted[i] {
+            continue;
+        }
+        counted[i] = true;
+        total += 1.0; // Prima attestazione in un gruppo conta 1.0
+
+        for j in (i + 1)..attestations.len() {
+            if counted[j] {
+                continue;
+            }
+            if attestations[i].domain == attestations[j].domain {
+                // Stesso dominio — contributo parziale
+                counted[j] = true;
+                total += 0.3;
+            }
+        }
+    }
+
+    // Fonti da domini non ancora contati
+    for j in 0..attestations.len() {
+        if !counted[j] {
+            total += 1.0;
+        }
+    }
+
+    (total * 10.0_f64).round() / 10.0
+}
+
+/// Estrae soggetto e numero da un fatto per contradiction detection.
+/// Pattern: "SUBJECT is/has/was NUMBER UNIT"
+/// Restituisce (soggetto_normalizzato, numero) se trovato.
+pub fn extract_subject_number(fact: &str) -> Option<(String, f64)> {
+    let lower = fact.to_lowercase();
+
+    // Trova il verbo separatore
+    let verbs = [" is ", " has ", " was ", " are ", " have ", " measures "];
+    let (subject_part, rest) = verbs.iter()
+        .filter_map(|v| {
+            lower.find(v).map(|pos| {
+                let subj = &fact[..pos];
+                let rest = &fact[pos + v.len()..];
+                (subj.to_string(), rest.to_string())
+            })
+        })
+        .next()?;
+
+    // Normalizza soggetto: lowercase, trim, rimuovi articoli
+    let subject = subject_part
+        .trim()
+        .to_lowercase()
+        .trim_start_matches("the ")
+        .trim_start_matches("a ")
+        .trim_start_matches("an ")
+        .to_string();
+
+    if subject.len() < 3 {
+        return None;
+    }
+
+    // Estrai primo numero dal rest
+    let number = extract_first_number(&rest)?;
+
+    Some((subject, number))
+}
+
+/// Estrae il primo numero da una stringa (supporta virgole e decimali).
+fn extract_first_number(s: &str) -> Option<f64> {
+    let mut num_str = String::new();
+    let mut found_digit = false;
+
+    for c in s.chars() {
+        if c.is_ascii_digit() || (c == '.' && found_digit) {
+            num_str.push(c);
+            found_digit = true;
+        } else if c == ',' && found_digit {
+            // Skip comma in numbers like 12,742
+            continue;
+        } else if found_digit {
+            break;
+        }
+    }
+
+    if num_str.is_empty() {
+        return None;
+    }
+
+    num_str.parse().ok()
 }
 
 /// Calcola il tier di un TrustRecord.
@@ -309,5 +448,110 @@ mod tests {
     fn test_query_count_starts_zero() {
         let r = TrustRecord::new(now());
         assert_eq!(r.query_count, 0);
+    }
+
+    // === Independence tests ===
+
+    #[test]
+    fn test_independence_empty() {
+        assert!((compute_independence(&[]) - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_independence_single() {
+        let a = vec![attest("science", SourceTier::PeerReviewed)];
+        assert!((compute_independence(&a) - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_independence_same_domain() {
+        let a = vec![
+            attest("science", SourceTier::PeerReviewed),
+            attest("science", SourceTier::Website),
+        ];
+        // 1.0 + 0.3 = 1.3
+        assert!((compute_independence(&a) - 1.3).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_independence_different_domains() {
+        let a = vec![
+            attest("science", SourceTier::PeerReviewed),
+            attest("geography", SourceTier::Website),
+        ];
+        // Both fully independent: 2.0
+        assert!((compute_independence(&a) - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_independence_mixed() {
+        let a = vec![
+            attest("science", SourceTier::Institutional),
+            attest("science", SourceTier::PeerReviewed),
+            attest("geography", SourceTier::Website),
+        ];
+        // science group: 1.0 + 0.3 = 1.3, geography: 1.0, total: 2.3
+        assert!((compute_independence(&a) - 2.3).abs() < 0.01);
+    }
+
+    // === Contradiction detection tests ===
+
+    #[test]
+    fn test_extract_subject_number_basic() {
+        let (subj, num) = extract_subject_number("Earth has a diameter of 12742 km").unwrap();
+        assert_eq!(subj, "earth");
+        assert!((num - 12742.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_extract_subject_number_is() {
+        let (subj, num) = extract_subject_number("The speed of light is 299792458 m/s").unwrap();
+        assert!(subj.contains("speed of light"));
+        assert!((num - 299792458.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_extract_subject_number_with_comma() {
+        let (_, num) = extract_subject_number("France has a population of 67,750,000").unwrap();
+        assert!((num - 67750000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_extract_subject_number_none() {
+        assert!(extract_subject_number("Hello world").is_none());
+        assert!(extract_subject_number("The sky is blue").is_none());
+    }
+
+    #[test]
+    fn test_extract_subject_number_the_prefix() {
+        let (subj, _) = extract_subject_number("The Moon is 384400 km from Earth").unwrap();
+        assert_eq!(subj, "moon");
+    }
+
+    // === Source breakdown tests ===
+
+    #[test]
+    fn test_source_breakdown() {
+        let mut r = TrustRecord::new(now());
+        r.attestations.push(attest("a", SourceTier::Institutional));
+        r.attestations.push(attest("b", SourceTier::PeerReviewed));
+        r.attestations.push(attest("c", SourceTier::PeerReviewed));
+        r.attestations.push(attest("d", SourceTier::Website));
+        let b = r.source_breakdown();
+        assert_eq!(b.institutional, 1);
+        assert_eq!(b.peer_reviewed, 2);
+        assert_eq!(b.website, 1);
+        assert_eq!(b.anonymous, 0);
+    }
+
+    // === Tier label tests ===
+
+    #[test]
+    fn test_tier_labels() {
+        assert_eq!(tier_label(&VeritTier::T0), "Unattested");
+        assert_eq!(tier_label(&VeritTier::T1), "Attested");
+        assert_eq!(tier_label(&VeritTier::T2), "Corroborated");
+        assert_eq!(tier_label(&VeritTier::T3), "Authoritative");
+        assert_eq!(tier_label(&VeritTier::T4), "Canonical");
     }
 }
