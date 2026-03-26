@@ -157,6 +157,16 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
         }
     });
 
+    // 8. Auto-seed se il DB è vuoto (es. dopo deploy Railway)
+    if state.data_count() == 0 {
+        let seed_state = state.clone();
+        tokio::spawn(async move {
+            // Aspetta che il server sia pronto
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            auto_seed(&seed_state);
+        });
+    }
+
     // Aspetta Ctrl+C, poi graceful shutdown con timeout 5s
     tokio::signal::ctrl_c().await?;
     tracing::info!("Shutdown in corso (max 5s)...");
@@ -181,4 +191,70 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
 
     tracing::info!("Nodo terminato.");
     Ok(())
+}
+
+/// Popola il DB direttamente via sled + pipeline CDE (no HTTP).
+fn auto_seed(state: &AppState) {
+    use varcavia_uag::state::{PREFIX_DATA, PREFIX_DDNA, PREFIX_INFO};
+
+    let facts = varcavia_crawler::get_seed_facts();
+    tracing::info!(
+        "DB vuoto rilevato, seeding con {} fatti...",
+        facts.len()
+    );
+
+    let keypair = state.keypair();
+    let mut inserted = 0u64;
+    let mut errors = 0u64;
+
+    for (content, domain) in &facts {
+        let content_bytes = content.as_bytes();
+
+        // Crea dDNA
+        let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
+            Ok(d) => d,
+            Err(_) => { errors += 1; continue; }
+        };
+        let data_id = ddna.id();
+
+        // Pipeline CDE
+        let score = {
+            let mut pipeline = state.pipeline.lock().unwrap();
+            match pipeline.process(content_bytes, &ddna, domain) {
+                Ok(result) => result.score.overall,
+                Err(_) => { continue; } // duplicato, skip
+            }
+        };
+
+        // Salva in sled
+        let Ok(ddna_bytes) = ddna.to_bytes() else {
+            errors += 1;
+            continue;
+        };
+
+        let data_key = AppState::make_key(PREFIX_DATA, &data_id);
+        let ddna_key = AppState::make_key(PREFIX_DDNA, &data_id);
+        let info_key = AppState::make_key(PREFIX_INFO, &data_id);
+
+        let _ = state.db.insert(data_key, content_bytes);
+        let _ = state.db.insert(ddna_key, ddna_bytes.as_slice());
+
+        let info = varcavia_uag::rest::DataInfo {
+            domain: domain.clone(),
+            score,
+            inserted_at_us: chrono::Utc::now().timestamp_micros(),
+            verification_count: 1,
+        };
+        if let Ok(j) = serde_json::to_vec(&info) {
+            let _ = state.db.insert(info_key, j);
+        }
+
+        inserted += 1;
+    }
+
+    tracing::info!(
+        "Auto-seed completato: {} inseriti, {} errori",
+        inserted,
+        errors
+    );
 }

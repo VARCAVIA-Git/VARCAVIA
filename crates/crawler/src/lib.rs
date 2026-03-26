@@ -252,6 +252,24 @@ pub async fn crawl_all() -> Vec<ExtractedFact> {
     all_facts
 }
 
+/// Restituisce tutti i fatti hardcoded come coppie (content, domain).
+/// Usato per il seeding diretto senza HTTP.
+pub fn get_seed_facts() -> Vec<(String, String)> {
+    let mut facts = Vec::new();
+    for (page, domain) in WIKI_PAGES {
+        for f in fallback_facts(page, domain) {
+            facts.push((f.text, f.domain));
+        }
+    }
+    for f in hardcoded_facts() {
+        facts.push((f.text, f.domain));
+    }
+    // Deduplica
+    let mut seen = std::collections::HashSet::new();
+    facts.retain(|f| seen.insert(f.0.clone()));
+    facts
+}
+
 /// Fatti di fallback per una specifica pagina Wikipedia.
 fn fallback_facts(page: &str, domain: &str) -> Vec<ExtractedFact> {
     let source = format!("wikipedia:{page}");
