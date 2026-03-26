@@ -11,8 +11,27 @@ use varcavia_arc::resonance;
 use varcavia_arc::validation::{LocalVote, VoteType};
 use varcavia_vtp::messages::{self, NodeMessage};
 
-use crate::state::{AppState, PREFIX_INFO};
+use crate::state::{AppState, PREFIX_CONSENSUS, PREFIX_INFO};
 use crate::rest::DataInfo;
+use serde::{Deserialize, Serialize};
+
+/// Registro persistente del risultato del consenso.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ConsensusRecord {
+    pub data_id: String,
+    pub score: f64,
+    pub confirmed: bool,
+    pub votes: Vec<VoteRecord>,
+    pub timestamp_us: i64,
+}
+
+/// Singolo voto registrato.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VoteRecord {
+    pub node_id: String,
+    pub vote: String,
+    pub confidence: f64,
+}
 
 /// Risultato del processo di consenso.
 #[derive(Debug)]
@@ -86,6 +105,7 @@ pub async fn run_consensus(
 
     // Raccogli i voti
     let mut local_votes: Vec<LocalVote> = Vec::new();
+    let mut vote_records: Vec<VoteRecord> = Vec::new();
     for handle in vote_handles {
         if let Ok(Some(NodeMessage::VoteResponse {
             node_id,
@@ -94,6 +114,11 @@ pub async fn run_consensus(
             ..
         })) = handle.await
         {
+            vote_records.push(VoteRecord {
+                node_id: node_id.clone(),
+                vote: vote.clone(),
+                confidence,
+            });
             let vote_type = match vote.as_str() {
                 "approve" => VoteType::Approve,
                 "reject" => VoteType::Reject,
@@ -126,6 +151,19 @@ pub async fn run_consensus(
         votes_received,
         confirmed
     );
+
+    // Salva il record di consenso
+    let record = ConsensusRecord {
+        data_id: data_id.to_string(),
+        score,
+        confirmed,
+        votes: vote_records,
+        timestamp_us: chrono::Utc::now().timestamp_micros(),
+    };
+    let consensus_key = AppState::make_key(PREFIX_CONSENSUS, data_id);
+    if let Ok(j) = serde_json::to_vec(&record) {
+        let _ = state.db.insert(consensus_key, j);
+    }
 
     // Se confermato, aggiorna lo score nel database
     if confirmed {

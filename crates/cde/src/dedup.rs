@@ -212,6 +212,14 @@ impl SemanticDedupIndex {
     }
 }
 
+/// Calcola la similarita trigram Jaccard tra due stringhe.
+/// Restituisce un valore tra 0.0 (completamente diversi) e 1.0 (identici).
+pub fn text_similarity(a: &str, b: &str) -> f64 {
+    let trigrams_a = SemanticDedupIndex::extract_trigrams(a);
+    let trigrams_b = SemanticDedupIndex::extract_trigrams(b);
+    SemanticDedupIndex::jaccard_similarity(&trigrams_a, &trigrams_b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +355,20 @@ mod tests {
         idx.insert("doc-1".into(), "HELLO WORLD");
         let result = idx.check_semantic_duplicate("hello world");
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_text_similarity() {
+        let sim = text_similarity(
+            "The temperature in Rome is 22 degrees",
+            "The temperature in Rome is 23 degrees",
+        );
+        assert!(sim > 0.7);
+        let sim2 = text_similarity(
+            "Earth is the third planet",
+            "Stock market closes high",
+        );
+        assert!(sim2 < 0.3);
     }
 
     #[test]

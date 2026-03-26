@@ -159,6 +159,13 @@ pub fn metrics_routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/v1/metrics", get(metrics))
 }
 
+/// Route per ricerca semantica e estrazione fatti
+pub fn search_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/v1/search", get(semantic_search))
+        .route("/api/v1/extract", post(extract_facts))
+}
+
 /// Route hero per demo pubblica + health + stats
 pub fn hero_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -540,14 +547,45 @@ async fn get_consensus_status(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
+    use crate::state::PREFIX_CONSENSUS;
+
     let info_key = AppState::make_key(PREFIX_INFO, &id);
     let ddna_key = AppState::make_key(PREFIX_DDNA, &id);
+    let consensus_key = AppState::make_key(PREFIX_CONSENSUS, &id);
     let peers = state.get_peers().await;
 
     match state.db.get(&info_key) {
         Ok(Some(info_bytes)) => {
             let has_ddna = state.db.get(&ddna_key).ok().flatten().is_some();
             if let Ok(info) = serde_json::from_slice::<DataInfo>(&info_bytes) {
+                // Recupera record di consenso se disponibile
+                let consensus = state
+                    .db
+                    .get(&consensus_key)
+                    .ok()
+                    .flatten()
+                    .and_then(|b| {
+                        serde_json::from_slice::<crate::consensus::ConsensusRecord>(&b).ok()
+                    });
+
+                let (votes, consensus_score, consensus_confirmed, consensus_timestamp) =
+                    if let Some(ref cr) = consensus {
+                        let votes: Vec<serde_json::Value> = cr
+                            .votes
+                            .iter()
+                            .map(|v| {
+                                serde_json::json!({
+                                    "node_id": &v.node_id[..16.min(v.node_id.len())],
+                                    "vote": v.vote,
+                                    "confidence": v.confidence,
+                                })
+                            })
+                            .collect();
+                        (votes, cr.score, cr.confirmed, Some(cr.timestamp_us))
+                    } else {
+                        (vec![], 0.0, false, None)
+                    };
+
                 (
                     StatusCode::OK,
                     Json(serde_json::json!({
@@ -557,6 +595,13 @@ async fn get_consensus_status(
                         "has_ddna": has_ddna,
                         "peer_count": peers.len(),
                         "consensus_possible": !peers.is_empty(),
+                        "consensus": {
+                            "score": consensus_score,
+                            "confirmed": consensus_confirmed,
+                            "votes_received": votes.len(),
+                            "votes": votes,
+                            "timestamp_us": consensus_timestamp,
+                        },
                     })),
                 )
             } else {
@@ -753,6 +798,168 @@ async fn hero_verify(
             "verification_count": 1,
             "warnings": warnings,
             "duplicate": false,
+        })),
+    )
+}
+
+/// GET /api/v1/search?q=...&limit=5 — Ricerca semantica per similarita trigram.
+async fn semantic_search(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let query = match params.get("q") {
+        Some(q) if !q.trim().is_empty() => q.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Parametro 'q' mancante. Uso: /api/v1/search?q=Rome+temperature"})),
+            );
+        }
+    };
+    let limit: usize = params
+        .get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(5);
+
+    let mut scored: Vec<(String, String, f64, f64)> = Vec::new(); // (id, content, similarity, score)
+
+    for item in state.db.scan_prefix(PREFIX_DATA) {
+        if let Ok((key, val)) = item {
+            let id = String::from_utf8_lossy(&key[PREFIX_DATA.len()..]).to_string();
+            let content = String::from_utf8_lossy(&val).to_string();
+            let sim = varcavia_cde::dedup::text_similarity(&query, &content);
+            if sim > 0.05 {
+                let info_key = AppState::make_key(PREFIX_INFO, &id);
+                let data_score = state
+                    .db
+                    .get(info_key)
+                    .ok()
+                    .flatten()
+                    .and_then(|b| serde_json::from_slice::<DataInfo>(&b).ok())
+                    .map(|i| i.score)
+                    .unwrap_or(0.0);
+                scored.push((id, content, sim, data_score));
+            }
+        }
+    }
+
+    // Ordina per similarita decrescente
+    scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit);
+
+    let results: Vec<serde_json::Value> = scored
+        .iter()
+        .map(|(id, content, sim, score)| {
+            serde_json::json!({
+                "id": id,
+                "content": content,
+                "similarity": (sim * 1000.0).round() / 1000.0,
+                "score": score,
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "query": query,
+            "results": results,
+            "total": results.len(),
+        })),
+    )
+}
+
+/// POST /api/v1/extract — Estrae fatti da un testo lungo e li inserisce.
+async fn extract_facts(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let text = match body.get("text").and_then(|v| v.as_str()) {
+        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Campo 'text' mancante"})),
+            );
+        }
+    };
+    let domain = body
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("general")
+        .to_string();
+
+    let claims = varcavia_cde::pipeline::extract_claims(&text);
+    if claims.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "claims": [],
+                "total": 0,
+                "inserted": 0,
+                "message": "Nessun fatto estratto dal testo",
+            })),
+        );
+    }
+
+    let keypair = state.keypair();
+    let mut results = Vec::new();
+    let mut inserted = 0u32;
+
+    for claim in &claims {
+        let content_bytes = claim.as_bytes();
+        let ddna = match varcavia_ddna::DataDna::create(content_bytes, &keypair) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let data_id = ddna.id();
+
+        // Pipeline CDE
+        let score = {
+            let mut pipeline = state.pipeline.lock().unwrap();
+            match pipeline.process(content_bytes, &ddna, &domain) {
+                Ok(result) => result.score.overall,
+                Err(_) => {
+                    // Duplicato o errore — includi comunque nella lista
+                    results.push(serde_json::json!({
+                        "claim": claim,
+                        "id": data_id,
+                        "status": "duplicate",
+                    }));
+                    continue;
+                }
+            }
+        };
+
+        // Salva
+        if let Ok(ddna_bytes) = ddna.to_bytes() {
+            let _ = state.db.insert(AppState::make_key(PREFIX_DATA, &data_id), content_bytes);
+            let _ = state.db.insert(AppState::make_key(PREFIX_DDNA, &data_id), ddna_bytes.as_slice());
+            let info = DataInfo {
+                domain: domain.clone(),
+                score,
+                inserted_at_us: chrono::Utc::now().timestamp_micros(),
+                verification_count: 1,
+            };
+            if let Ok(j) = serde_json::to_vec(&info) {
+                let _ = state.db.insert(AppState::make_key(PREFIX_INFO, &data_id), j);
+            }
+        }
+        inserted += 1;
+        results.push(serde_json::json!({
+            "claim": claim,
+            "id": data_id,
+            "score": score,
+            "status": "inserted",
+        }));
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "claims": results,
+            "total": claims.len(),
+            "inserted": inserted,
         })),
     )
 }
@@ -1236,5 +1443,79 @@ mod tests {
             .oneshot(Request::builder().uri("/api/v1/verify").body(Body::empty()).unwrap())
             .await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_search_endpoint() {
+        let state = test_state();
+
+        // Insert some data first
+        let body = serde_json::json!({
+            "content": "Earth has a radius of 6371 kilometres",
+            "domain": "science",
+            "source": "test"
+        });
+        let app = crate::server::create_router(state.clone());
+        let _ = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/data")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Search
+        let app2 = crate::server::create_router(state);
+        let response = app2
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/search?q=Earth+radius&limit=3")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["results"].as_array().unwrap().len() >= 1);
+        assert!(json["results"][0]["similarity"].as_f64().unwrap() > 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_search_missing_param() {
+        let app = test_app();
+        let response = app
+            .oneshot(Request::builder().uri("/api/v1/search").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_extract_endpoint() {
+        let app = test_app();
+        let body = serde_json::json!({
+            "text": "Earth is the third planet from the Sun. It has a radius of 6371 km. The weather is nice today.",
+            "domain": "science"
+        });
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/extract")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["total"].as_u64().unwrap() >= 1);
     }
 }

@@ -51,6 +51,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .merge(rest::node_routes())
         .merge(rest::network_routes())
         .merge(rest::translate_routes())
+        .merge(rest::search_routes())
         .merge(rest::metrics_routes())
         .merge(rest::hero_routes())
         .layer(axum_mw::from_fn_with_state(

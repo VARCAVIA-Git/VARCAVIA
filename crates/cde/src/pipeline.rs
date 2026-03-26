@@ -170,6 +170,58 @@ impl Pipeline {
     }
 }
 
+/// Estrae claim fattuali da un testo lungo.
+/// Splitta in frasi e filtra quelle che contengono pattern fattuali.
+pub fn extract_claims(text: &str) -> Vec<String> {
+    let mut claims = Vec::new();
+
+    // Split per frasi (. ! ?)
+    for raw in text.split(|c| c == '.' || c == '!' || c == '?') {
+        let sentence = raw.trim();
+        if sentence.len() < 15 {
+            continue;
+        }
+
+        let lower = sentence.to_lowercase();
+
+        // Contiene un numero?
+        let has_number = sentence.chars().any(|c| c.is_ascii_digit());
+
+        // Contiene un nome proprio? (parola che inizia con maiuscola, non a inizio frase)
+        let words: Vec<&str> = sentence.split_whitespace().collect();
+        let has_proper_noun = words.iter().skip(1).any(|w| {
+            w.chars().next().map_or(false, |c| c.is_uppercase())
+        });
+
+        // Contiene pattern fattuali?
+        let has_pattern = lower.contains(" is ")
+            || lower.contains(" are ")
+            || lower.contains(" was ")
+            || lower.contains(" were ")
+            || lower.contains(" has ")
+            || lower.contains(" have ")
+            || lower.contains(" had ")
+            || lower.contains(" contains ")
+            || lower.contains(" measures ")
+            || lower.contains(" weighs ")
+            || lower.contains(" consists ")
+            || lower.contains(" comprises ")
+            || lower.contains(" founded ")
+            || lower.contains(" discovered ")
+            || lower.contains(" invented ");
+
+        if has_pattern && (has_number || has_proper_noun) {
+            // Ricostruisci con punto finale
+            let claim = format!("{sentence}.");
+            if !claims.contains(&claim) {
+                claims.push(claim);
+            }
+        }
+    }
+
+    claims
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +270,21 @@ mod tests {
         let (ddna, _) = create_test_ddna(b"test pipeline count");
         pipeline.process(b"test pipeline count", &ddna, "test").unwrap();
         assert_eq!(pipeline.data_count(), 1);
+    }
+
+    #[test]
+    fn test_extract_claims() {
+        let text = "Earth is the third planet from the Sun. It has a radius of 6371 km. The sky is blue. Water has a boiling point of 100 degrees Celsius. Hi.";
+        let claims = extract_claims(text);
+        assert!(claims.len() >= 2);
+        assert!(claims.iter().any(|c| c.contains("Earth")));
+        assert!(claims.iter().any(|c| c.contains("100")));
+    }
+
+    #[test]
+    fn test_extract_claims_empty() {
+        let claims = extract_claims("hello world");
+        assert!(claims.is_empty());
     }
 
     #[test]
