@@ -4,11 +4,11 @@
 # ════════════════════════════════════════════════════════════
 #
 # Uso: bash scripts/seed_production.sh [URL]
-# Default: https://varcavia-production.up.railway.app
+# Default: https://varcavia.com
 #
 set -euo pipefail
 
-BASE_URL="${1:-https://varcavia-production.up.railway.app}"
+BASE_URL="${1:-https://varcavia.com}"
 API="$BASE_URL/api/v1/data"
 
 GREEN='\033[0;32m'

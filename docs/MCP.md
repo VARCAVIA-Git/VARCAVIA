@@ -51,7 +51,7 @@ For a remote VARCAVIA node:
     "varcavia": {
       "command": "/path/to/varcavia/target/release/varcavia-mcp",
       "env": {
-        "VARCAVIA_URL": "https://varcavia-production.up.railway.app"
+        "VARCAVIA_URL": "https://varcavia.com"
       }
     }
   }

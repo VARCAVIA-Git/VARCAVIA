@@ -6,7 +6,7 @@ info:
   license:
     name: AGPL-3.0
 servers:
-  - url: https://varcavia-production.up.railway.app
+  - url: https://varcavia.com
     description: Production
   - url: http://localhost:8080
     description: Local development

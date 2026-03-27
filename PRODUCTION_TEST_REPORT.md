@@ -1,7 +1,7 @@
 # VARCAVIA Production Test Report
 
 **Date:** 2026-03-27
-**URL:** https://varcavia-production.up.railway.app
+**URL:** https://varcavia.com
 **Node version:** 0.1.0
 **Facts in DB:** 1487 (400+ hardcoded + Wikidata SPARQL)
 

@@ -6,7 +6,7 @@
 
 Open protocol for cryptographically verified data. Pure Rust monorepo, 8 crates, ~10K LOC, 246 tests.
 
-**Production:** https://varcavia-production.up.railway.app
+**Production:** https://varcavia.com
 **Repo:** git@github.com:VARCAVIA-Git/VARCAVIA.git
 
 ## Current Architecture (v2)

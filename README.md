@@ -4,7 +4,7 @@
 
 Open protocol for cryptographically verified data. Every fact gets a **Data DNA** — a tamper-proof certificate with source identity, timestamp, trust tier, and cryptographic proof.
 
-**Live demo:** https://varcavia-production.up.railway.app
+**Live demo:** https://varcavia.com
 **OpenAPI spec:** [docs/openapi.yaml](docs/openapi.yaml)
 **MCP for Claude:** [docs/MCP.md](docs/MCP.md)
 **Protocol spec:** [docs/VERITPROTOCOL.md](docs/VERITPROTOCOL.md)
@@ -13,21 +13,21 @@ Open protocol for cryptographically verified data. Every fact gets a **Data DNA*
 
 ```bash
 # Verify a fact (read-only — never inserts data)
-curl "https://varcavia-production.up.railway.app/api/v1/verify?fact=Earth+has+a+mean+radius+of+6371+kilometres."
+curl "https://varcavia.com/api/v1/verify?fact=Earth+has+a+mean+radius+of+6371+kilometres."
 
 # Search the database
-curl "https://varcavia-production.up.railway.app/api/v1/search?q=speed+of+light&limit=5"
+curl "https://varcavia.com/api/v1/search?q=speed+of+light&limit=5"
 
 # Get trust tier distribution
-curl "https://varcavia-production.up.railway.app/api/v1/stats/tiers"
+curl "https://varcavia.com/api/v1/stats/tiers"
 
 # Submit a new fact
-curl -X POST "https://varcavia-production.up.railway.app/api/v1/data" \
+curl -X POST "https://varcavia.com/api/v1/data" \
   -H "Content-Type: application/json" \
   -d '{"content":"The Moon orbits Earth at 384400 km","domain":"science","source":"textbook"}'
 
 # Batch verify
-curl -X POST "https://varcavia-production.up.railway.app/api/v1/batch/verify" \
+curl -X POST "https://varcavia.com/api/v1/batch/verify" \
   -H "Content-Type: application/json" \
   -d '{"facts":["Earth diameter is 12742 km","Water boils at 100 degrees Celsius"]}'
 ```
@@ -120,7 +120,7 @@ API key: set `VARCAVIA_API_KEY` env var to require `X-API-Key` header for POST e
   "mcpServers": {
     "varcavia": {
       "command": "path/to/varcavia-mcp",
-      "env": { "VARCAVIA_URL": "https://varcavia-production.up.railway.app" }
+      "env": { "VARCAVIA_URL": "https://varcavia.com" }
     }
   }
 }

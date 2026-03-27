@@ -267,21 +267,21 @@ footer{border-top:1px solid var(--border);padding:36px 20px;text-align:center;co
     </div>
     <div class="code-block active" id="codeCurl">
 <pre><span class="cm"># Verify a fact (read-only, never inserts)</span>
-<span class="ck">curl</span> <span class="cs">"https://varcavia-production.up.railway.app/api/v1/verify?fact=Earth+has+a+mean+radius+of+6371+km"</span>
+<span class="ck">curl</span> <span class="cs">"https://varcavia.com/api/v1/verify?fact=Earth+has+a+mean+radius+of+6371+km"</span>
 <span class="cm"># → {"status":"verified","trust":{"tier":"T1","tier_label":"Attested",...}}</span>
 
 <span class="cm"># Search the database</span>
-<span class="ck">curl</span> <span class="cs">"https://varcavia-production.up.railway.app/api/v1/search?q=speed+of+light&limit=5"</span>
+<span class="ck">curl</span> <span class="cs">"https://varcavia.com/api/v1/search?q=speed+of+light&limit=5"</span>
 
 <span class="cm"># Batch verify multiple facts</span>
-<span class="ck">curl</span> -X POST https://varcavia-production.up.railway.app/api/v1/batch/verify \
+<span class="ck">curl</span> -X POST https://varcavia.com/api/v1/batch/verify \
   -H <span class="cs">"Content-Type: application/json"</span> \
   -d <span class="cv">'{"facts":["Earth has a mean radius of 6371 km","Water boils at 100 degrees Celsius"]}'</span></pre>
     </div>
     <div class="code-block" id="codePython">
 <pre><span class="ck">import</span> requests
 
-API = <span class="cs">"https://varcavia-production.up.railway.app/api/v1"</span>
+API = <span class="cs">"https://varcavia.com/api/v1"</span>
 
 <span class="cm"># Verify a fact</span>
 r = requests.get(f<span class="cs">"{API}/verify"</span>, params={<span class="cs">"fact"</span>: <span class="cs">"Earth has a mean radius of 6371 km"</span>})
@@ -298,7 +298,7 @@ r = requests.post(f<span class="cs">"{API}/batch/verify"</span>, json={
     print(f<span class="cs">"  {item['fact']}: score={item['score']:.2f}"</span>)</pre>
     </div>
     <div class="code-block" id="codeJs">
-<pre><span class="ck">const</span> API = <span class="cs">"https://varcavia-production.up.railway.app/api/v1"</span>;
+<pre><span class="ck">const</span> API = <span class="cs">"https://varcavia.com/api/v1"</span>;
 
 <span class="cm">// Verify a fact</span>
 <span class="ck">const</span> res = <span class="ck">await</span> fetch(`<span class="cv">${API}/verify?fact=</span>${encodeURIComponent(<span class="cs">"Earth has a mean radius of 6371 km"</span>)}`);
