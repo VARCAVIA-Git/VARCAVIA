@@ -1,4 +1,7 @@
 //! Configurazione del nodo VARCAVIA.
+//! Nota: il nodo attualmente usa CLI args (clap). Questo modulo e preparato
+//! per il caricamento config da file TOML in futuro.
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 

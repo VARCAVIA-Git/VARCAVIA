@@ -199,11 +199,7 @@ pub fn compute_independence(attestations: &[Attestation]) -> f64 {
     }
 
     // Fonti da domini non ancora contati
-    for j in 0..attestations.len() {
-        if !counted[j] {
-            total += 1.0;
-        }
-    }
+    total += counted.iter().filter(|&&c| !c).count() as f64;
 
     (total * 10.0_f64).round() / 10.0
 }

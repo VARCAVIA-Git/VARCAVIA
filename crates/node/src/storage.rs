@@ -1,6 +1,9 @@
 //! Storage locale basato su sled (alternativa leggera a RocksDB).
 //!
 //! Wrapper KV store per dati + dDNA del nodo VARCAVIA.
+//! Nota: il nodo attualmente usa AppState (uag/state.rs) per lo storage.
+//! Questo modulo e preparato per uso futuro standalone.
+#![allow(dead_code)]
 
 use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Serialize};

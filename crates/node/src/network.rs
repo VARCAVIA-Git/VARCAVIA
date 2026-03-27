@@ -15,6 +15,7 @@ use varcavia_vtp::messages::{self, NodeMessage};
 
 /// Informazioni su un peer connesso.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PeerInfo {
     pub node_id: String,
     pub address: SocketAddr,
@@ -119,6 +120,7 @@ impl NetworkManager {
     }
 
     /// Indirizzo di ascolto.
+    #[allow(dead_code)]
     pub fn listen_addr(&self) -> SocketAddr {
         self.listen_addr
     }

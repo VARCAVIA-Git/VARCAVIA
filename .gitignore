@@ -20,12 +20,19 @@ __pycache__/
 *~
 
 # Environment
+.env
 .env.local
 .env.production
 
 # Data
 ~/varcavia-data/
+varcavia-data/
+*.db
+sled-data/
 models/*.onnx
+
+# Node
+node_modules/
 
 # OS
 .DS_Store
@@ -35,6 +42,11 @@ Thumbs.db
 *.so
 *.dylib
 *.dll
+
+# Secrets
+*.secret
+*.pem
+*.key
 
 # Temporary
 /tmp/

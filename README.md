@@ -1,53 +1,61 @@
 # \V/ VARCAVIA
 
-**Verifiable Autonomous Registry for Clean, Accessible, Validated & Interlinked Archives**
+**The verification layer for the world's data**
 
 > **Live demo:** https://varcavia-production.up.railway.app
 > **Protocol spec:** [docs/VERITPROTOCOL.md](docs/VERITPROTOCOL.md)
+> **OpenAPI:** [docs/openapi.yaml](docs/openapi.yaml)
+> **MCP for Claude:** [docs/MCP.md](docs/MCP.md)
 
-Decentralized infrastructure where every piece of data is cryptographically verified, deduplicated, and scored for reliability — automatically.
+An open protocol for cryptographically verified data. Every fact gets dual fingerprints, Ed25519 signatures, a 5-tier trust score, and fuzzy verification.
 
 ## Quick Start
 
 ```bash
-# Build
-cargo build --bin varcavia-node
-
-# Run a node
+# Build and run
 cargo run --bin varcavia-node -- --port 8080
 
-# Verify a fact
-curl "http://localhost:8080/api/v1/verify?fact=Earth+diameter+is+12742+km"
+# Verify a fact (read-only — never inserts)
+curl "http://localhost:8080/api/v1/verify?fact=Earth+has+a+mean+radius+of+6371+kilometres."
+
+# Search the database
+curl "http://localhost:8080/api/v1/search?q=Earth+radius&limit=5"
+
+# Submit a new fact
+curl -X POST http://localhost:8080/api/v1/data \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"Roma: 22C","domain":"climate","source":"sensor-01"}'
 ```
+
+The node auto-seeds with 400+ curated facts on first start (works offline).
 
 ## What It Does
 
-Every fact that enters VARCAVIA gets a **Data DNA** — a cryptographic identity that proves:
+**Verify** — Check if a fact exists in the network. Fuzzy matching finds similar facts even with different wording. `/verify` is read-only; it never inserts data.
 
-- **Who** created it (Ed25519 signature)
-- **What** it contains (BLAKE3 + SHA3-512 dual fingerprint)
-- **When** it was created (microsecond-precision timestamp)
-- **How reliable** it is (composite score from 6-stage pipeline)
+**Trust** — Every fact has a 5-tier trust level (T0-T4) based on attestations from independent sources, with authority weighting and contradiction detection.
 
-Duplicate or tampered data is automatically detected and rejected.
+**Certify** — Facts get a Data DNA: Ed25519 signature, BLAKE3+SHA3-512 dual fingerprint, microsecond timestamp, custody chain.
 
 ## Architecture
 
 ```
-                    ┌─────────────────────┐
-                    │    REST / GraphQL    │  ← Universal Access Gateway
-                    ├─────────────────────┤
-                    │  Clean Data Engine   │  ← 6-stage purification pipeline
-                    ├─────────────────────┤
-                    │   ARC Consensus      │  ← Distributed validation < 200ms
-                    ├─────────────────────┤
-                    │     Data DNA         │  ← Cryptographic identity layer
-                    ├─────────────────────┤
-                    │  Transport (VTP)     │  ← P2P messaging + CRDT sync
-                    └─────────────────────┘
+┌─────────────────────┐
+│  Trust Tier System   │  ← T0-T4 with authority scoring
+├─────────────────────┤
+│  REST API + MCP      │  ← 24 endpoints + Claude integration
+├─────────────────────┤
+│  Clean Data Engine   │  ← 6-stage pipeline: dedup, validate, score
+├─────────────────────┤
+│  ARC Consensus       │  ← Distributed validation < 5s
+├─────────────────────┤
+│  Data DNA            │  ← Cryptographic identity layer
+├─────────────────────┤
+│  Transport (VTP)     │  ← P2P messaging + CRDT sync
+└─────────────────────┘
 ```
 
-### Crates
+### Crates (8)
 
 | Crate | Purpose |
 |-------|---------|
@@ -55,80 +63,72 @@ Duplicate or tampered data is automatically detected and rejected.
 | `vtp` | Transport Protocol — packets, priority queuing, compression, CRDT sync |
 | `arc` | Adaptive Resonance Consensus — committee selection, voting, reputation |
 | `cde` | Clean Data Engine — 6-stage pipeline: dedup, validate, normalize, score |
-| `uag` | Universal Access Gateway — Axum HTTP server, REST API, format translator |
-| `node` | Node binary — wires everything together, storage (sled), P2P networking |
+| `uag` | Universal Access Gateway — Axum HTTP, REST API, trust tiers, translator |
+| `node` | Node binary — storage (sled), P2P networking, auto-seed, background crawler |
+| `crawler` | Fact crawler — Wikipedia, Wikidata SPARQL, 400+ hardcoded facts |
+| `mcp` | MCP server — 4 tools for Claude: verify_fact, search_facts, submit_fact, get_stats |
 
-### CDE Pipeline (6 Stages)
+### Trust Tier System
 
-```
-Input → [Hash Dedup] → [LSH Near-Dedup] → [Semantic Dedup] → [Source Validation] → [Normalization] → [Scoring] → Output
-         BLAKE3 O(1)    MinHash O(1)       Trigram Jaccard    Ed25519 verify        VUF + zstd        Composite
-```
+| Tier | Label | Requirements |
+|------|-------|-------------|
+| T0 | Unattested | No attestations |
+| T1 | Attested | 1+ attestation, authority >= 1 |
+| T2 | Corroborated | 2+ domains, authority >= 5 |
+| T3 | Authoritative | Authority >= 15, 1+ institutional/peer-reviewed source |
+| T4 | Canonical | Authority >= 50, 2+ high-authority, age > 7 days, 0 contradictions |
+
+Source weights: Institutional=10, PeerReviewed=5, Media=3, Website=1, Anonymous=0.5
 
 ## API Reference
 
-### Hero Endpoint
-
+### Verification (read-only)
 ```
-GET /api/v1/verify?fact=Earth+diameter+is+12742+km
+GET  /api/v1/verify?fact=...         Fuzzy verify: exact hash → 70%+ trigram → similar → not_found
+GET  /api/v1/search?q=...&limit=5    Semantic search by trigram similarity
 ```
-
-Returns Data DNA + reliability score for any fact. This is the main demo endpoint.
 
 ### Data Operations
-
 ```
-POST   /api/v1/data              Insert data (creates dDNA, runs CDE pipeline)
-GET    /api/v1/data/:id          Get data by ID (blake3 hex)
-GET    /api/v1/data/:id/dna      Get full Data DNA
-GET    /api/v1/data/:id/score    Get reliability score
-DELETE /api/v1/data/:id          Soft delete
-POST   /api/v1/data/query        Query by domain: {"query":"", "domain":"climate"}
-POST   /api/v1/data/verify       Verify content: {"id":"...", "content":"..."}
+POST   /api/v1/data                  Insert fact (dDNA + CDE pipeline + trust T0)
+GET    /api/v1/data/:id              Get fact by ID
+GET    /api/v1/data/:id/dna          Full Data DNA certificate
+GET    /api/v1/data/:id/trust        Full TrustRecord
+POST   /api/v1/attest/:id            Add attestation (promotes trust tier)
+POST   /api/v1/extract               Extract claims from long text
 ```
 
-### Node & Network
-
+### Batch (Enterprise)
 ```
-GET    /api/v1/node/status          Node info (uptime, data count, node ID)
-GET    /api/v1/node/peers           Connected peers
-GET    /api/v1/node/stats           Statistics
-GET    /api/v1/node/consensus/:id   Consensus state for a data item
-GET    /api/v1/network/health       Network health
-POST   /api/v1/translate            Format conversion: {"data":..., "from_format":"json", "to_format":"xml"}
+POST   /api/v1/batch/verify          Verify array of facts: {"facts":["...", "..."]}
+POST   /api/v1/batch/submit          Insert array: {"items":[{"content":"...","domain":"..."}]}
 ```
 
-### Insert Example
-
-```bash
-curl -X POST http://localhost:8080/api/v1/data \
-  -H 'Content-Type: application/json' \
-  -d '{"content":"Roma: 22°C","domain":"climate","source":"sensor-01"}'
+### System
+```
+GET    /api/v1/node/status           Node info + avg_latency_ms
+GET    /api/v1/metrics               claims_per_second, facts_ingested, storage_bytes
+GET    /api/v1/stats/tiers           Trust tier distribution: {"T0":0,"T1":400,...}
+GET    /health                       Health check
 ```
 
-Response:
+### API Key Authentication
+Set `VARCAVIA_API_KEY` env var to require `X-API-Key` header for POST endpoints. GET endpoints are always public.
+
+## MCP Server (Claude Integration)
+
 ```json
 {
-  "id": "dcd380ce7fb6b778c7ccba044497321a079f1f57d237d00189877bf66f2867cc",
-  "status": "accepted",
-  "score": 0.73
+  "mcpServers": {
+    "varcavia": {
+      "command": "path/to/varcavia-mcp",
+      "env": { "VARCAVIA_URL": "https://varcavia-production.up.railway.app" }
+    }
+  }
 }
 ```
 
-## Multi-Node Network
-
-```bash
-# Start a 3-node local network
-bash scripts/run_local_network.sh 3
-
-# Nodes auto-discover peers and replicate data via ARC consensus
-```
-
-When data is inserted on any node:
-1. The node creates a dDNA and runs the CDE pipeline
-2. It sends a `VoteRequest` to all peers
-3. Peers validate (Ed25519, fingerprint, timestamp) and vote
-4. If consensus score >= 0.67: data is confirmed and replicated
+Tools: `verify_fact`, `search_facts`, `submit_fact`, `get_stats`. See [docs/MCP.md](docs/MCP.md).
 
 ## Docker
 
@@ -137,47 +137,27 @@ docker build -t varcavia .
 docker run -p 8080:8080 varcavia
 ```
 
-## Web Dashboard
-
-```bash
-cd web/dashboard
-npm install
-npm run dev
-# Open http://localhost:5173
-```
-
-Real-time monitoring: node status, data table, peer list, insert form.
-
 ## Tech Stack
 
 | Component | Technology |
 |-----------|-----------|
-| Core | Rust 1.78+, Cargo workspace |
-| Crypto | Ed25519 (ed25519-dalek), BLAKE3, SHA3-512 |
-| Storage | sled (embedded KV store) |
-| API | Axum (async HTTP) |
+| Core | Rust 1.78+, 8-crate Cargo workspace |
+| Crypto | Ed25519, BLAKE3, SHA3-512 |
+| Storage | sled (embedded KV) |
+| API | Axum 0.7 (async) |
 | Consensus | Custom ARC protocol |
-| Compression | zstd |
-| Dashboard | React + Vite |
+| Trust | 5-tier VERIT system |
+| Crawler | Wikipedia + Wikidata SPARQL |
+| MCP | JSON-RPC over stdio |
 
-## Contributing
+## Stats
 
-```bash
-# Setup
-cargo build --workspace
-
-# Test
-cargo test --workspace
-
-# Lint
-cargo clippy --workspace
-
-# Format
-cargo fmt --all
-```
-
-All contributions must pass `cargo test` and `cargo clippy` with zero errors.
+- **224 tests** across 8 crates
+- **10,124 lines** of Rust
+- **400+ curated facts** (offline seed)
+- **24 API endpoints**
+- **<10ms** average latency
 
 ## License
 
-AGPL-3.0 — Modifications must remain open source.
+AGPL-3.0
