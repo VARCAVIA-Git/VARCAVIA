@@ -372,6 +372,84 @@ paths:
         '200':
           description: Translated data
 
+  /api/v1/data/{id}/trust:
+    get:
+      summary: Get trust record
+      description: Returns full TrustRecord with attestations, contradictions, tier, and demand signal.
+      tags: [Trust]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: TrustRecord
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tier: { type: string, enum: [T0, T1, T2, T3, T4] }
+                  attestations: { type: array }
+                  contradictions: { type: array }
+                  query_count: { type: integer }
+                  first_seen_us: { type: integer }
+
+  /api/v1/attest/{id}:
+    post:
+      summary: Add attestation
+      description: Add an attestation to a fact. Recomputes trust tier.
+      tags: [Trust]
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source: { type: string, description: "Source name (e.g. 'NASA')" }
+                domain: { type: string }
+                source_tier: { type: string, enum: [institutional, peer_reviewed, mainstream_media, website, anonymous] }
+      responses:
+        '200':
+          description: Updated tier
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  tier: { type: string }
+                  authority_score: { type: number }
+                  attestations_count: { type: integer }
+
+  /api/v1/stats/tiers:
+    get:
+      summary: Trust tier distribution
+      tags: [Trust]
+      responses:
+        '200':
+          description: Tier counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  T0: { type: integer }
+                  T1: { type: integer }
+                  T2: { type: integer }
+                  T3: { type: integer }
+                  T4: { type: integer }
+                  total: { type: integer }
+
   /api/v1/node/status:
     get:
       summary: Node status
