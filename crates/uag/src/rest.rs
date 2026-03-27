@@ -778,6 +778,10 @@ async fn hero_verify(
             if best_kw_match.as_ref().map_or(true, |(_, _, s)| kw_score > *s) {
                 best_kw_match = Some((id, content, kw_score));
             }
+            // Early termination: very high confidence match
+            if kw_score >= 0.8 {
+                break;
+            }
         }
         // Keyword similar: overlap >= 0.4 (track for similar_found fallback)
         else if kw_score >= 0.4 && nums_ok && best_kw_match.is_none() {
