@@ -4,7 +4,7 @@
 
 **Verifiable Autonomous Registry for Clean, Accessible, Validated & Interlinked Archives**
 
-Open protocol for cryptographically verified data. Pure Rust monorepo, 8 crates, ~10K LOC, 224 tests.
+Open protocol for cryptographically verified data. Pure Rust monorepo, 8 crates, ~10K LOC, 246 tests.
 
 **Production:** https://varcavia-production.up.railway.app
 **Repo:** git@github.com:VARCAVIA-Git/VARCAVIA.git
@@ -19,15 +19,16 @@ Open protocol for cryptographically verified data. Pure Rust monorepo, 8 crates,
 | `crates/vtp` | 8 source files | Transport Protocol — TCP messages, priority queuing, zstd compression, CRDT sync |
 | `crates/arc` | 6 source files | Adaptive Resonance Consensus — committee selection, reputation-weighted voting |
 | `crates/cde` | 7 source files | Clean Data Engine — 6-stage pipeline: hash dedup, LSH, trigram semantic dedup, validation, normalization, scoring |
-| `crates/uag` | 9 source files | Universal Access Gateway — Axum REST API (24 endpoints), trust tiers, format translator, middleware |
+| `crates/uag` | 10 source files | Universal Access Gateway — Axum REST API (24 endpoints), trust tiers, keyword matching, format translator, middleware |
 | `crates/node` | 5 source files | Node binary — sled storage, TCP P2P networking, auto-seed, background Wikidata crawler |
 | `crates/crawler` | 2 source files | Facts crawler — Wikipedia HTML parser, Wikidata SPARQL, 400+ hardcoded curated facts |
 | `crates/mcp` | 1 source file | MCP server — JSON-RPC over stdio, 4 tools for Claude integration |
 
 ### Key Files
 
-- `crates/uag/src/rest.rs` — All 24 REST endpoint handlers (~1900 lines)
-- `crates/uag/src/trust.rs` — Trust Tier System with authority scoring (~550 lines)
+- `crates/uag/src/rest.rs` — All 24 REST endpoint handlers (~1950 lines)
+- `crates/uag/src/keyword_match.rs` — Keyword extraction, number normalization, unit matching (~470 lines)
+- `crates/uag/src/trust.rs` — Trust Tier System with authority scoring (~560 lines)
 - `crates/crawler/src/lib.rs` — 400+ hardcoded seed facts + Wikipedia crawler (~910 lines)
 - `crates/crawler/src/wikidata.rs` — Wikidata SPARQL queries (~370 lines)
 - `crates/node/src/main.rs` — Node bootstrap, auto-seed, background crawler (~420 lines)
@@ -103,10 +104,18 @@ GET    /                             Landing page (include_str index.html)
 1. Compute BLAKE3 hash of the query fact
 2. Check for exact hash match in sled DB (prefix `d:`)
 3. If found: return "verified" with dDNA, trust info, verification mining (query_count++)
-4. If not found: scan all facts with trigram similarity
-5. If best match ≥ 70%: return "verified" via fuzzy match (with matched_fact and similarity)
-6. If best match 40-69%: return "similar_found" with related facts
-7. If best match < 40%: return "not_found"
+4. If not found: **keyword extraction + number normalization matching** (keyword_match.rs):
+   - Extract content keywords (strip stop words, normalize to lowercase)
+   - Extract numbers (handle commas: "299,792,458" → 299792458, written multipliers: "14 million" → 14000000)
+   - Normalize units (kilometres→km, metres per second→m/s, degrees celsius→celsius)
+   - Compute keyword overlap (Jaccard) + number match (1% tolerance)
+   - If keyword overlap ≥ 0.6 AND numbers match: return "verified" via keyword match
+   - Early termination at overlap ≥ 0.8 (skip remaining facts)
+5. Trigram similarity fallback:
+   - If best match ≥ 70%: return "verified" via fuzzy match
+   - If best match 40-69%: return "similar_found" with related facts
+6. Keyword similar_found fallback (overlap ≥ 0.4 + numbers match)
+7. If nothing matched: return "not_found"
 
 /verify NEVER inserts data. Only POST /api/v1/data inserts.
 
@@ -166,18 +175,24 @@ Font: IBM Plex Mono (Google Fonts)
 ### Commands
 ```bash
 cargo build --workspace          # Build all
-cargo test --workspace           # Run 224 tests
+cargo test --workspace           # Run 246 tests
 cargo clippy --workspace         # Lint (must be 0 warnings)
 cargo run --bin varcavia-node    # Run node on :8080
 cargo run --bin varcavia-mcp     # Run MCP server (stdio)
 cargo run --bin varcavia-node -- seed --port 8080  # Seed via HTTP
 ```
 
+## Production Stats
+
+- All 24 endpoints verified on production (2026-03-27)
+- Server-side latency: ~17ms average
+- 246 tests, 0 clippy warnings
+- 35+ commits on main
+
 ## Known Issues
 
-1. Fuzzy matching threshold (70%) may be too high for some fact variants
-2. All seed facts are T1 — need external attestations to reach T2+
-3. Wikidata crawler may get 403 on some environments (falls back to hardcoded)
-4. Landing page hardcodes "8 domains" — should query API
-5. `network/topology` endpoint returns empty stub
-6. `graphql.rs` is a placeholder stub
+1. All seed facts are T1 — need external attestations to reach T2+
+2. Wikidata crawler may get 403 on some environments (falls back to hardcoded)
+3. Landing page hardcodes "8 domains" — should query API
+4. `network/topology` endpoint returns empty stub
+5. `graphql.rs` is a placeholder stub

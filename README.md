@@ -34,7 +34,7 @@ curl -X POST "https://varcavia-production.up.railway.app/api/v1/batch/verify" \
 
 ## Architecture
 
-Pure Rust. 8 crates. ~10K LOC. 224 tests. Zero `unsafe`.
+Pure Rust. 8 crates. ~10K LOC. 246 tests. Zero `unsafe`.
 
 ```
 ┌─────────────────────────────┐
@@ -58,7 +58,7 @@ Pure Rust. 8 crates. ~10K LOC. 224 tests. Zero `unsafe`.
 | `vtp` | Transport — TCP messages, priority queuing, zstd compression, CRDT sync |
 | `arc` | Consensus — committee selection, reputation-weighted voting |
 | `cde` | Clean Data Engine — hash dedup, LSH near-dedup, trigram semantic dedup, scoring |
-| `uag` | API Gateway — 24 Axum REST endpoints, trust tiers, format translator |
+| `uag` | API Gateway — 24 Axum REST endpoints, trust tiers, keyword matching, format translator |
 | `node` | Binary — sled storage, TCP networking, auto-seed, background Wikidata crawler |
 | `crawler` | Facts — Wikipedia parser, Wikidata SPARQL, 400+ hardcoded curated facts |
 | `mcp` | MCP server — 4 tools for Claude: verify_fact, search_facts, submit_fact, get_stats |
@@ -84,7 +84,7 @@ Independence scoring: same-domain attestations count 0.3, cross-domain count 1.0
 ### Verification (read-only)
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/verify?fact=...` | Fuzzy verify: exact hash, then trigram similarity fallback |
+| GET | `/api/v1/verify?fact=...` | Fuzzy verify: exact hash → keyword+number match → trigram fallback |
 | GET | `/api/v1/search?q=...&limit=5` | Semantic search by trigram similarity |
 
 ### Data
@@ -132,7 +132,7 @@ API key: set `VARCAVIA_API_KEY` env var to require `X-API-Key` header for POST e
 
 ```bash
 cargo build --workspace        # Build all 8 crates
-cargo test --workspace         # Run 224 tests
+cargo test --workspace         # Run 246 tests
 cargo clippy --workspace       # Lint (0 warnings)
 cargo run --bin varcavia-node   # Start a node on :8080
 ```
@@ -146,7 +146,22 @@ docker run -p 8080:8080 varcavia
 
 ## Status
 
-**v0.1** — Production deployment on Railway with 400+ curated facts, 5-tier trust system, Wikidata SPARQL crawler, fuzzy verification, MCP integration, batch API.
+**v0.1** — Production deployment on Railway. All 24 endpoints verified. ~17ms server-side latency.
+
+- 400+ curated seed facts (auto-seeded on deploy)
+- 5-tier trust system with authority scoring and independence detection
+- Keyword extraction + number normalization matching in `/verify`
+- Wikidata SPARQL crawler (background, every 6h)
+- MCP server for Claude integration
+- Batch API for enterprise use
+
+## Stats
+
+- **246 tests** across 8 crates
+- **~10K lines** of Rust
+- **24 API endpoints** (all production-verified)
+- **~17ms** average server-side latency
+- **0** clippy warnings
 
 ## License
 
