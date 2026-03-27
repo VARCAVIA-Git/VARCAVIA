@@ -766,7 +766,76 @@ async fn hero_verify(
         );
     }
 
-    // 2. No exact hash match — fuzzy search for similar facts
+    // 2. Keyword extraction + number matching (semantic matching)
+    let mut best_kw_match: Option<(String, String, f64)> = None; // (id, content, score)
+    for (key, val) in state.db.scan_prefix(PREFIX_DATA).flatten() {
+        let id = String::from_utf8_lossy(&key[PREFIX_DATA.len()..]).to_string();
+        let content = String::from_utf8_lossy(&val).to_string();
+        let (kw_score, nums_ok) = crate::keyword_match::keyword_match_score(&fact, &content);
+
+        // Keyword verified: overlap >= 0.6 AND numbers match
+        if kw_score >= 0.6 && nums_ok {
+            if best_kw_match.as_ref().map_or(true, |(_, _, s)| kw_score > *s) {
+                best_kw_match = Some((id, content, kw_score));
+            }
+        }
+        // Keyword similar: overlap >= 0.4 (track for similar_found fallback)
+        else if kw_score >= 0.4 && nums_ok && best_kw_match.is_none() {
+            best_kw_match = Some((id, content, kw_score));
+        }
+    }
+
+    // If keyword match found a verified result (>=0.6 + numbers match), return it
+    if let Some((ref kid, ref kcontent, kscore)) = best_kw_match {
+        if kscore >= 0.6 {
+            let dna_json = load_ddna_json(&state.db, kid);
+            let (m_score, m_domain, m_vcount) = state.db.get(AppState::make_key(PREFIX_INFO, kid))
+                .ok().flatten()
+                .and_then(|b| serde_json::from_slice::<DataInfo>(&b).ok())
+                .map(|i| (i.score, i.domain, i.verification_count))
+                .unwrap_or((0.0, "unknown".into(), 0));
+
+            let mut trust = get_or_create_trust(&state.db, kid);
+            trust.query_count += 1;
+            trust.last_updated_us = chrono::Utc::now().timestamp_micros();
+            let tier = crate::trust::compute_tier(&trust, trust.last_updated_us);
+            trust.tier = tier.clone();
+            save_trust(&state.db, kid, &trust);
+
+            let (related_facts, _) = find_related_facts(&state, &fact);
+
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "fact": fact,
+                    "status": "verified",
+                    "message": format!(
+                        "Verified — matched an existing fact in the network ({}% keyword match).",
+                        (kscore * 100.0).round()
+                    ),
+                    "matched_fact": kcontent,
+                    "similarity": kscore,
+                    "data_dna": dna_json,
+                    "score": m_score,
+                    "domain": m_domain,
+                    "verification_count": m_vcount,
+                    "related_facts": related_facts,
+                    "trust": {
+                        "tier": tier.to_string(),
+                        "tier_label": crate::trust::tier_label(&tier),
+                        "authority_score": trust.authority_score(),
+                        "attestations": trust.attestations.len(),
+                        "effective_independent_sources": crate::trust::compute_independence(&trust.attestations),
+                        "demand_signal": trust.query_count,
+                        "contradictions": trust.contradictions.len(),
+                        "source_breakdown": trust.source_breakdown(),
+                    },
+                })),
+            );
+        }
+    }
+
+    // 3. Trigram similarity scan (fallback)
     let (related_facts, best_similarity) = find_related_facts(&state, &fact);
 
     if best_similarity >= 0.7 && !related_facts.is_empty() {
@@ -840,7 +909,27 @@ async fn hero_verify(
         );
     }
 
-    // 3. Nothing found (similarity < 40%)
+    // 4. Check if keyword match found a similar_found (0.4-0.59 range)
+    if let Some((_, ref kcontent, kscore)) = best_kw_match {
+        if kscore >= 0.4 {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "fact": fact,
+                    "status": "similar_found",
+                    "message": format!(
+                        "This exact fact is not in the network, but a similar fact was found ({}% keyword match).",
+                        (kscore * 100.0).round()
+                    ),
+                    "data_dna": null,
+                    "related_facts": [{"content": kcontent, "similarity": kscore}],
+                    "best_similarity": kscore,
+                })),
+            );
+        }
+    }
+
+    // 5. Nothing found
     (
         StatusCode::OK,
         Json(serde_json::json!({

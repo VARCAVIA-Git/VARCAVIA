@@ -13,6 +13,7 @@ pub mod graphql;
 pub mod translator;
 pub mod middleware;
 pub mod trust;
+pub mod keyword_match;
 
 use thiserror::Error;
 
