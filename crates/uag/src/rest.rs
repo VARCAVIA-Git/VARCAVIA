@@ -766,18 +766,71 @@ async fn hero_verify(
         );
     }
 
-    // 2. No exact match — search for similar facts
+    // 2. No exact hash match — fuzzy search for similar facts
     let (related_facts, best_similarity) = find_related_facts(&state, &fact);
 
     if best_similarity >= 0.7 && !related_facts.is_empty() {
-        // Strong match found (>=70%)
+        // Strong fuzzy match (>=70%) — treat as verified via the best match
+        let best = &related_facts[0];
+        let matched_id = best["id"].as_str().unwrap_or("");
+        let matched_content = best["content"].as_str().unwrap_or("");
+
+        // Load dDNA and trust for the matched fact
+        let dna_json = load_ddna_json(&state.db, matched_id);
+
+        let (m_score, m_domain, m_vcount) = state.db.get(AppState::make_key(PREFIX_INFO, matched_id))
+            .ok().flatten()
+            .and_then(|b| serde_json::from_slice::<DataInfo>(&b).ok())
+            .map(|i| (i.score, i.domain, i.verification_count))
+            .unwrap_or((0.0, "unknown".into(), 0));
+
+        // Verification mining on the matched fact
+        let mut trust = get_or_create_trust(&state.db, matched_id);
+        trust.query_count += 1;
+        trust.last_updated_us = chrono::Utc::now().timestamp_micros();
+        let tier = crate::trust::compute_tier(&trust, trust.last_updated_us);
+        trust.tier = tier.clone();
+        save_trust(&state.db, matched_id, &trust);
+
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "fact": fact,
+                "status": "verified",
+                "message": format!(
+                    "Verified — matched an existing fact in the network ({}% similarity).",
+                    (best_similarity * 100.0).round()
+                ),
+                "matched_fact": matched_content,
+                "similarity": best_similarity,
+                "data_dna": dna_json,
+                "score": m_score,
+                "domain": m_domain,
+                "verification_count": m_vcount,
+                "related_facts": related_facts,
+                "trust": {
+                    "tier": tier.to_string(),
+                    "tier_label": crate::trust::tier_label(&tier),
+                    "authority_score": trust.authority_score(),
+                    "attestations": trust.attestations.len(),
+                    "effective_independent_sources": crate::trust::compute_independence(&trust.attestations),
+                    "demand_signal": trust.query_count,
+                    "contradictions": trust.contradictions.len(),
+                    "source_breakdown": trust.source_breakdown(),
+                },
+            })),
+        );
+    }
+
+    if best_similarity >= 0.4 && !related_facts.is_empty() {
+        // Moderate match (40-69%) — similar found
         return (
             StatusCode::OK,
             Json(serde_json::json!({
                 "fact": fact,
                 "status": "similar_found",
                 "message": format!(
-                    "This exact fact is not in the network, but a closely matching fact was found ({}% match).",
+                    "This exact fact is not in the network, but similar facts were found (best match: {}%).",
                     (best_similarity * 100.0).round()
                 ),
                 "data_dna": null,
@@ -787,7 +840,7 @@ async fn hero_verify(
         );
     }
 
-    // 3. Nothing found (or similarity too low to be meaningful)
+    // 3. Nothing found (similarity < 40%)
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -832,6 +885,16 @@ fn find_related_facts(state: &AppState, query: &str) -> (Vec<serde_json::Value>,
         .collect();
 
     (related, (cross_check_score * 1000.0).round() / 1000.0)
+}
+
+/// Helper: carica il dDNA come JSON per un dato ID.
+fn load_ddna_json(db: &sled::Db, data_id: &str) -> serde_json::Value {
+    let ddna_key = AppState::make_key(PREFIX_DDNA, data_id);
+    db.get(&ddna_key).ok().flatten()
+        .and_then(|bytes| varcavia_ddna::DataDna::from_bytes(&bytes).ok())
+        .and_then(|ddna| varcavia_ddna::codec::to_json(&ddna).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(serde_json::Value::Null)
 }
 
 /// Helper: ottiene o crea un TrustRecord per un dato ID.
