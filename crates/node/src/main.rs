@@ -82,11 +82,26 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
 
     // 1. Apri (o crea) il database sled
     // VARCAVIA_DB_PATH env var overrides default (for Railway persistent volumes)
-    let db_path = std::env::var("VARCAVIA_DB_PATH")
+    let preferred_path = std::env::var("VARCAVIA_DB_PATH")
         .unwrap_or_else(|_| format!("{data_dir}/db"));
-    std::fs::create_dir_all(&db_path).ok();
-    let db = sled::open(&db_path)?;
-    tracing::info!("Storage aperto: {}", db_path);
+    std::fs::create_dir_all(&preferred_path).ok();
+    let (db, db_path) = match sled::open(&preferred_path) {
+        Ok(db) => {
+            tracing::info!("Storage aperto: {}", preferred_path);
+            (db, preferred_path)
+        }
+        Err(e) => {
+            let fallback = format!("{data_dir}/db");
+            tracing::warn!(
+                "Impossibile aprire {}: {} — fallback a {}",
+                preferred_path, e, fallback
+            );
+            std::fs::create_dir_all(&fallback).ok();
+            let db = sled::open(&fallback)?;
+            tracing::info!("Storage aperto (fallback): {}", fallback);
+            (db, fallback)
+        }
+    };
 
     // 2. Carica o genera keypair del nodo
     // Store key alongside the DB for persistence
