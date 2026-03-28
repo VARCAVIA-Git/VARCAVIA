@@ -53,6 +53,7 @@ pub fn create_router_with_config(state: Arc<AppState>, config: &ServerConfig) ->
         .merge(rest::translate_routes())
         .merge(rest::search_routes())
         .merge(rest::metrics_routes())
+        .merge(rest::spider_routes())
         .merge(rest::trust_routes())
         .merge(rest::batch_routes())
         .merge(rest::hero_routes())

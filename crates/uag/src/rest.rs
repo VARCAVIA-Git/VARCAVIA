@@ -156,6 +156,11 @@ pub fn network_routes() -> Router<Arc<AppState>> {
         .route("/api/v1/network/topology", get(network_topology))
 }
 
+/// Route per /api/v1/spider
+pub fn spider_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/api/v1/spider/status", get(spider_status))
+}
+
 /// Route per /api/v1/translate
 pub fn translate_routes() -> Router<Arc<AppState>> {
     Router::new().route("/api/v1/translate", post(translate))
@@ -1425,6 +1430,19 @@ async fn metrics(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> 
         "facts_ingested_total": facts_ingested,
         "uptime_hours": (uptime as f64 / 3600.0 * 100.0).round() / 100.0,
         "storage_bytes": storage_bytes,
+    }))
+}
+
+/// GET /api/v1/spider/status — Spider status and stats.
+async fn spider_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "running": true,
+        "topics_crawled": state.spider_topics.load(std::sync::atomic::Ordering::Relaxed),
+        "facts_new": state.spider_new_facts.load(std::sync::atomic::Ordering::Relaxed),
+        "facts_attested": state.spider_attested.load(std::sync::atomic::Ordering::Relaxed),
+        "contradictions_found": state.spider_contradictions.load(std::sync::atomic::Ordering::Relaxed),
+        "total_facts_in_db": state.data_count(),
+        "uptime_secs": state.uptime_secs(),
     }))
 }
 

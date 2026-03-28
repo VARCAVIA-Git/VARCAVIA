@@ -37,6 +37,11 @@ pub struct AppState {
     pub latency_sum_us: AtomicU64,
     /// Contatore richieste per media latenza
     pub latency_count: AtomicU64,
+    /// Spider stats (shared with background spider task)
+    pub spider_topics: AtomicU64,
+    pub spider_new_facts: AtomicU64,
+    pub spider_attested: AtomicU64,
+    pub spider_contradictions: AtomicU64,
 }
 
 impl AppState {
@@ -55,6 +60,10 @@ impl AppState {
             facts_ingested: AtomicU64::new(0),
             latency_sum_us: AtomicU64::new(0),
             latency_count: AtomicU64::new(0),
+            spider_topics: AtomicU64::new(0),
+            spider_new_facts: AtomicU64::new(0),
+            spider_attested: AtomicU64::new(0),
+            spider_contradictions: AtomicU64::new(0),
         }
     }
 

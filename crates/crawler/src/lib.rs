@@ -4,6 +4,7 @@
 //! Usato per popolare il nodo con dati reali.
 
 pub mod wikidata;
+pub mod spider;
 
 /// Pagine Wikipedia da scaricare per l'estrazione di fatti.
 const WIKI_PAGES: &[(&str, &str)] = &[
