@@ -369,24 +369,20 @@ async fn run_semantic_spider(state: Arc<AppState>) {
                 continue;
             }
 
-            // Check for contradiction with similar existing facts
-            let mut dominated = false;
-            for (k, v) in state.db.scan_prefix(PREFIX_DATA).flatten().take(500) {
+            // Check for contradiction with similar existing facts (sample 100)
+            for (k, v) in state.db.scan_prefix(PREFIX_DATA).flatten().take(100) {
                 let existing = String::from_utf8_lossy(&v);
                 if let Some(info) = varcavia_crawler::spider::detect_contradiction(&existing, &fact.text) {
                     let ex_id = String::from_utf8_lossy(&k[PREFIX_DATA.len()..]).to_string();
-                    tracing::warn!(
+                    tracing::debug!(
                         "Contradiction: '{}' vs '{}' ({:.1}% divergence)",
                         &ex_id[..16.min(ex_id.len())], &fact.text[..40.min(fact.text.len())], info.divergence_pct
                     );
                     spider.stats.contradictions_found.fetch_add(1, Ordering::Relaxed);
                     state.spider_contradictions.fetch_add(1, Ordering::Relaxed);
-                    dominated = true;
                     break;
                 }
             }
-            if dominated { continue; }
-
             // New fact — CDE pipeline
             let score = {
                 let mut pipeline = state.pipeline.lock().unwrap();

@@ -224,6 +224,19 @@ async fn crawl_wikidata_properties(topic: &str, domain: &str) -> Option<Vec<Extr
     let bindings = data.get("results")?.get("bindings")?.as_array()?;
     let mut facts = Vec::new();
 
+    // Properties to skip (technical metadata, not factual)
+    let skip_props: HashSet<&str> = [
+        "height", "width", "duration", "aspect ratio", "number of pages",
+        "Commons category", "Commons gallery", "image", "Wikimedia",
+        "template", "taxon", "Unicode", "topic's main category",
+        "category", "icon", "logo", "flag", "coat of arms", "page banner",
+        "pronunciation", "IPA", "described by source", "maintained by",
+        "instance of", "subclass of", "facet of", "topic's main template",
+        "Stack Exchange tag", "Freebase ID", "GND ID", "VIAF ID",
+        "Library of Congress", "ISNI", "BnF ID", "NKC ID",
+        "subreddit", "hashtag", "GitHub", "Twitter", "Facebook",
+    ].into_iter().collect();
+
     for row in bindings {
         let prop = row.get("propLabel")?.get("value")?.as_str()?;
         let val = row.get("valLabel")?.get("value")?.as_str()?;
@@ -234,7 +247,24 @@ async fn crawl_wikidata_properties(topic: &str, domain: &str) -> Option<Vec<Extr
         }
         if prop.len() < 3 || val.len() < 2 { continue; }
 
-        let text = format!("The {prop} of {topic} is {val}.");
+        // Skip known noise properties
+        if skip_props.iter().any(|s| prop.to_lowercase().contains(&s.to_lowercase())) {
+            continue;
+        }
+
+        // Skip bare numbers without context (e.g., "21", "210")
+        if val.parse::<f64>().is_ok() && val.len() < 6 {
+            continue;
+        }
+
+        // Format dates: "1969-10-29T00:00:00Z" → "1969"
+        let formatted_val = if val.contains('T') && val.contains('-') && val.len() > 10 {
+            val.get(..4).unwrap_or(val).to_string()
+        } else {
+            val.to_string()
+        };
+
+        let text = format!("The {prop} of {topic} is {formatted_val}.");
         if text.len() > 20 && text.len() < 300 {
             facts.push(ExtractedFact {
                 text,
@@ -294,31 +324,38 @@ pub fn extract_concepts(text: &str) -> Vec<String> {
     concepts
 }
 
-/// Detect if two facts about the same subject have contradicting numbers.
+/// Detect if two facts about the same subject AND attribute have contradicting numbers.
+/// Requires high keyword overlap (>=0.6) to avoid false positives like
+/// "Earth radius 6371" vs "Earth population 8 billion".
 pub fn detect_contradiction(existing: &str, new_fact: &str) -> Option<ContradictionInfo> {
     let ex_kw = varcavia_uag::keyword_match::extract_keywords(existing);
     let new_kw = varcavia_uag::keyword_match::extract_keywords(new_fact);
     let overlap = varcavia_uag::keyword_match::keyword_overlap(&ex_kw, &new_kw);
 
-    if overlap < 0.4 { return None; } // Different topics
+    // Require high overlap — same subject AND same attribute
+    if overlap < 0.6 { return None; }
 
     let ex_nums = varcavia_uag::keyword_match::extract_numbers(existing);
     let new_nums = varcavia_uag::keyword_match::extract_numbers(new_fact);
 
-    for en in &ex_nums {
-        for nn in &new_nums {
-            if *en != 0.0 && *nn != 0.0 {
-                let max_val = en.abs().max(nn.abs());
-                let divergence = (en - nn).abs() / max_val;
-                if divergence > 0.01 && divergence < 10.0 {
-                    return Some(ContradictionInfo {
-                        divergence_pct: divergence * 100.0,
-                        existing_num: *en,
-                        new_num: *nn,
-                    });
-                }
-            }
-        }
+    // Need exactly 1 number each for a meaningful comparison
+    if ex_nums.len() != 1 || new_nums.len() != 1 { return None; }
+
+    let en = ex_nums[0];
+    let nn = new_nums[0];
+    if en == 0.0 || nn == 0.0 { return None; }
+
+    let max_val = en.abs().max(nn.abs());
+    let divergence = (en - nn).abs() / max_val;
+
+    // Only flag if numbers are close enough to be about the same thing
+    // but different enough to be a real disagreement (1% to 50%)
+    if divergence > 0.01 && divergence < 0.5 {
+        return Some(ContradictionInfo {
+            divergence_pct: divergence * 100.0,
+            existing_num: en,
+            new_num: nn,
+        });
     }
     None
 }
@@ -432,22 +469,17 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_contradiction_different_subject() {
-        // Earth vs Mars share "radius" but different subjects
+    fn test_detect_contradiction_different_attribute() {
+        // Same subject but different attribute — NOT a contradiction
         let c = detect_contradiction(
             "Earth has a radius of 6371 km",
-            "Mars has a radius of 3390 km",
+            "Earth has a population of 8 billion",
         );
-        // These DO share enough keywords to detect a contradiction
-        // (both have "radius", "km") — the system correctly flags it
-        if let Some(info) = c {
-            assert!(info.divergence_pct > 40.0); // ~47% difference
-        }
+        assert!(c.is_none()); // Low keyword overlap (radius vs population)
     }
 
     #[test]
     fn test_detect_contradiction_unrelated() {
-        // Completely unrelated topics
         let c = detect_contradiction(
             "Gold has a melting point of 1064 degrees",
             "Brazil has a population of 214 million",
