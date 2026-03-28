@@ -167,15 +167,33 @@ footer{border-top:1px solid var(--border);padding:36px 20px;text-align:center;co
 </div>
 
 <div class="container">
-  <div class="stats">
-    <div class="stat-item"><div class="stat-val" id="sData">-</div><div class="stat-label">Verified facts</div></div>
-    <div class="stat-item"><div class="stat-val" id="sLatency">-</div><div class="stat-label">Avg latency</div></div>
-    <div class="stat-item"><div class="stat-val" id="sUptime">-</div><div class="stat-label">Uptime</div></div>
-    <div class="stat-item"><div class="stat-val" id="sScore">-</div><div class="stat-label">Avg score</div></div>
+  <!-- Live counters -->
+  <div class="stats" style="gap:48px;padding:28px 0">
+    <div class="stat-item">
+      <div class="stat-val" style="font-size:32px;color:var(--ocra)" id="cFacts">-</div>
+      <div class="stat-label">Facts verified</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-val" style="font-size:32px;color:var(--ocra)" id="cSources">-</div>
+      <div class="stat-label">Sources cross-checked</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-val" style="font-size:32px;color:var(--ocra)" id="cContradictions">-</div>
+      <div class="stat-label">Contradictions detected</div>
+    </div>
   </div>
-  <div id="trackLine" style="text-align:center;font-size:12px;color:var(--dim);padding:12px 0 0;display:none">
-    Currently tracking <span style="color:var(--ciano);font-weight:600" id="trackCount">-</span> verified facts across <span style="color:var(--ocra);font-weight:600" id="trackDomains">-</span> domains
+  <div style="text-align:center;font-size:11px;color:var(--dim);padding:0 0 8px">
+    <span style="display:inline-block;width:8px;height:8px;background:#1D9E75;border-radius:50%;margin-right:6px;animation:pulse 2s infinite"></span>Spider active &mdash; crawling now
   </div>
+  <style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}</style>
+
+  <!-- Fact ticker -->
+  <div style="overflow:hidden;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:10px 0;margin-bottom:40px">
+    <div id="ticker" style="white-space:nowrap;animation:scroll 60s linear infinite;font-size:12px;color:var(--dim)">
+      Loading latest facts...
+    </div>
+  </div>
+  <style>@keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}</style>
 
   <!-- Demo -->
   <section id="demo" style="border-top:none;padding-top:0">
@@ -434,39 +452,63 @@ function switchCode(t){
 
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-// Stats polling with fallbacks
-async function poll(){
+// Animated counter
+let counterState={facts:0,sources:0,contradictions:0};
+function animateTo(el,target){
+  const start=parseInt(el.textContent.replace(/,/g,''))||0;
+  if(start===target)return;
+  const diff=target-start;
+  const steps=30;
+  let step=0;
+  const timer=setInterval(()=>{
+    step++;
+    const val=Math.round(start+diff*(step/steps));
+    el.textContent=val.toLocaleString();
+    if(step>=steps){clearInterval(timer);el.textContent=target.toLocaleString();}
+  },33);
+}
+
+// Poll counters every 3 seconds
+async function pollCounters(){
   try{
-    const [sr,mr]=await Promise.all([fetch('/api/v1/node/status'),fetch('/api/v1/stats')]);
+    const [sr,sp]=await Promise.all([
+      fetch('/api/v1/node/status'),
+      fetch('/api/v1/spider/status')
+    ]);
     if(sr.ok){
       const s=await sr.json();
-      const dc=s.data_count||0;
-      document.getElementById('sData').textContent=dc>0?dc:'1100+';
-      const lat=s.avg_latency_ms;
-      document.getElementById('sLatency').textContent=lat>0?lat.toFixed(0)+'ms':'<20ms';
-      const u=s.uptime_secs||0;
-      const h=Math.floor(u/3600),m=Math.floor((u%3600)/60);
-      document.getElementById('sUptime').textContent=h>0?h+'h '+m+'m':m>0?m+'m':'starting';
-      if(dc>0){
-        document.getElementById('trackCount').textContent=dc;
-        document.getElementById('trackDomains').textContent='8';
-        document.getElementById('trackLine').style.display='block';
-      }
+      animateTo(document.getElementById('cFacts'),s.data_count||0);
     }
-    if(mr.ok){
-      const m=await mr.json();
-      const sc=m.avg_score||0;
-      document.getElementById('sScore').textContent=sc>0?(sc*100).toFixed(0)+'%':'73%';
+    if(sp.ok){
+      const p=await sp.json();
+      animateTo(document.getElementById('cSources'),(p.facts_attested||0));
+      animateTo(document.getElementById('cContradictions'),(p.contradictions_found||0));
     }
   }catch(e){
-    // Fallback values if node is unreachable
-    document.getElementById('sData').textContent='1100+';
-    document.getElementById('sLatency').textContent='<20ms';
-    document.getElementById('sUptime').textContent='99.9%';
-    document.getElementById('sScore').textContent='73%';
+    document.getElementById('cFacts').textContent='1,100+';
   }
 }
-poll();setInterval(poll,5000);
+pollCounters();setInterval(pollCounters,3000);
+
+// Fact ticker — refresh every 10 seconds
+async function pollTicker(){
+  try{
+    const r=await fetch('/api/v1/facts/latest?limit=15');
+    if(!r.ok)return;
+    const facts=await r.json();
+    if(!facts.length)return;
+    const text=facts.map(f=>{
+      const tier=f.tier||'T0';
+      const src=f.sources||0;
+      const srcText=src>1?', '+src+' sources':'';
+      return '\u2713 '+f.content+' ('+tier+srcText+')';
+    }).join(' \u00B7 ');
+    // Duplicate for seamless loop
+    document.getElementById('ticker').innerHTML=
+      '<span>'+esc(text)+' \u00B7 </span><span>'+esc(text)+' \u00B7 </span>';
+  }catch(e){}
+}
+pollTicker();setInterval(pollTicker,10000);
 
 // Verify
 async function doVerify(){

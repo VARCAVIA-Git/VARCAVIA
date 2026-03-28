@@ -190,6 +190,7 @@ pub fn hero_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v1/verify", get(hero_verify))
         .route("/api/v1/stats", get(public_stats))
+        .route("/api/v1/facts/latest", get(facts_latest))
         .route("/health", get(health_check))
 }
 
@@ -1456,6 +1457,53 @@ async fn public_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
         "node_count": 1 + peers.len(),
         "avg_score": compute_avg_score(&state.db),
     }))
+}
+
+/// GET /api/v1/facts/latest?limit=10 — Most recently added facts with trust tier.
+async fn facts_latest(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    use crate::state::PREFIX_TRUST;
+    let limit: usize = params.get("limit").and_then(|l| l.parse().ok()).unwrap_or(10).min(50);
+
+    let mut items: Vec<(i64, serde_json::Value)> = Vec::new(); // (timestamp, json)
+
+    for (key, val) in state.db.scan_prefix(PREFIX_INFO).flatten() {
+        if let Ok(info) = serde_json::from_slice::<DataInfo>(&val) {
+            let id = String::from_utf8_lossy(&key[PREFIX_INFO.len()..]).to_string();
+
+            // Get content
+            let content = state.db.get(AppState::make_key(PREFIX_DATA, &id))
+                .ok().flatten()
+                .map(|b| String::from_utf8_lossy(&b).to_string())
+                .unwrap_or_default();
+            if content.is_empty() { continue; }
+
+            // Get trust tier
+            let (tier, sources) = state.db.get(AppState::make_key(PREFIX_TRUST, &id))
+                .ok().flatten()
+                .and_then(|b| serde_json::from_slice::<crate::trust::TrustRecord>(&b).ok())
+                .map(|t| (t.tier.to_string(), t.attestations.len()))
+                .unwrap_or(("T0".into(), 0));
+
+            items.push((info.inserted_at_us, serde_json::json!({
+                "content": content,
+                "tier": tier,
+                "sources": sources,
+                "domain": info.domain,
+                "score": info.score,
+                "added_at_us": info.inserted_at_us,
+            })));
+        }
+    }
+
+    // Sort by timestamp descending (most recent first)
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+    items.truncate(limit);
+
+    let results: Vec<serde_json::Value> = items.into_iter().map(|(_, v)| v).collect();
+    Json(serde_json::json!(results))
 }
 
 fn compute_avg_score(db: &sled::Db) -> f64 {
