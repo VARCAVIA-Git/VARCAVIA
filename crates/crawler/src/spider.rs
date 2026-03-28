@@ -56,29 +56,62 @@ impl Default for SpiderStats {
 
 pub struct SemanticSpider {
     pending: Arc<Mutex<VecDeque<Seed>>>,
-    visited: Arc<Mutex<HashSet<String>>>,
+    visited: sled::Tree,
     pub stats: Arc<SpiderStats>,
 }
 
-impl Default for SemanticSpider {
-    fn default() -> Self { Self::new() }
-}
-
 impl SemanticSpider {
-    pub fn new() -> Self {
+    /// Create spider with sled-backed persistence.
+    /// `db` should be the main sled::Db — spider opens its own trees.
+    pub fn with_db(db: &sled::Db) -> Self {
+        let visited = db.open_tree("spider_visited").expect("open spider_visited tree");
+
+        // Load queue from sled, or initialize with seeds
+        let queue_tree = db.open_tree("spider_queue").expect("open spider_queue tree");
         let mut q = VecDeque::new();
-        for (topic, domain) in INITIAL_SEEDS {
-            q.push_back(Seed {
-                topic: topic.to_string(),
-                depth: 0,
-                domain: domain.to_string(),
-            });
+
+        // Try to restore queue from previous run
+        for item in queue_tree.iter().flatten() {
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&item.1) {
+                let topic = val["topic"].as_str().unwrap_or("").to_string();
+                let depth = val["depth"].as_u64().unwrap_or(0) as u32;
+                let domain = val["domain"].as_str().unwrap_or("general").to_string();
+                if !topic.is_empty() {
+                    q.push_back(Seed { topic, depth, domain });
+                }
+            }
         }
+
+        // If queue is empty (first run or fully drained), seed with initial topics
+        if q.is_empty() {
+            for (topic, domain) in INITIAL_SEEDS {
+                q.push_back(Seed {
+                    topic: topic.to_string(), depth: 0, domain: domain.to_string(),
+                });
+            }
+        }
+
+        let visited_count = visited.len();
+        tracing::info!(
+            "Spider restored: {} visited topics, {} queued seeds",
+            visited_count, q.len()
+        );
+
+        // Clear the queue tree (we hold the queue in memory, flush periodically)
+        queue_tree.clear().ok();
+
         Self {
             pending: Arc::new(Mutex::new(q)),
-            visited: Arc::new(Mutex::new(HashSet::new())),
+            visited,
             stats: Arc::new(SpiderStats::default()),
         }
+    }
+
+    /// Fallback constructor for tests (in-memory sled).
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        let db = sled::Config::new().temporary(true).open().expect("temp sled");
+        Self::with_db(&db)
     }
 
     pub async fn next_seed(&self) -> Option<Seed> {
@@ -89,12 +122,16 @@ impl SemanticSpider {
         self.pending.lock().await.push_back(seed);
     }
 
+    pub fn is_visited_sync(&self, topic: &str) -> bool {
+        self.visited.contains_key(topic.to_lowercase().as_bytes()).unwrap_or(false)
+    }
+
     pub async fn is_visited(&self, topic: &str) -> bool {
-        self.visited.lock().await.contains(&topic.to_lowercase())
+        self.is_visited_sync(topic)
     }
 
     pub async fn mark_visited(&self, topic: &str) {
-        self.visited.lock().await.insert(topic.to_lowercase());
+        let _ = self.visited.insert(topic.to_lowercase().as_bytes(), b"1");
     }
 
     pub async fn queue_size(&self) -> usize {
@@ -104,11 +141,31 @@ impl SemanticSpider {
     pub async fn reseed(&self) {
         let mut q = self.pending.lock().await;
         for (topic, domain) in INITIAL_SEEDS {
-            q.push_back(Seed {
-                topic: topic.to_string(),
-                depth: 0,
-                domain: domain.to_string(),
+            if !self.is_visited_sync(topic) {
+                q.push_back(Seed {
+                    topic: topic.to_string(), depth: 0, domain: domain.to_string(),
+                });
+            }
+        }
+    }
+
+    /// Flush current queue to sled for persistence across restarts.
+    pub async fn flush_queue(&self, db: &sled::Db) {
+        let queue_tree = match db.open_tree("spider_queue") {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        queue_tree.clear().ok();
+        let q = self.pending.lock().await;
+        for (i, seed) in q.iter().enumerate().take(5000) {
+            let val = serde_json::json!({
+                "topic": seed.topic,
+                "depth": seed.depth,
+                "domain": seed.domain,
             });
+            if let Ok(bytes) = serde_json::to_vec(&val) {
+                let _ = queue_tree.insert(format!("{i:06}").as_bytes(), bytes);
+            }
         }
     }
 }

@@ -81,12 +81,20 @@ async fn run_node(args: Args) -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
 
     // 1. Apri (o crea) il database sled
-    let db_path = format!("{data_dir}/db");
+    // VARCAVIA_DB_PATH env var overrides default (for Railway persistent volumes)
+    let db_path = std::env::var("VARCAVIA_DB_PATH")
+        .unwrap_or_else(|_| format!("{data_dir}/db"));
+    std::fs::create_dir_all(&db_path).ok();
     let db = sled::open(&db_path)?;
     tracing::info!("Storage aperto: {}", db_path);
 
     // 2. Carica o genera keypair del nodo
-    let key_path = format!("{data_dir}/node_key.secret");
+    // Store key alongside the DB for persistence
+    let key_path = if std::env::var("VARCAVIA_DB_PATH").is_ok() {
+        format!("{db_path}/node_key.secret")
+    } else {
+        format!("{data_dir}/node_key.secret")
+    };
     let keypair = if std::path::Path::new(&key_path).exists() {
         let secret_bytes = std::fs::read(&key_path)?;
         let secret: [u8; 32] = secret_bytes
@@ -306,8 +314,8 @@ async fn run_semantic_spider(state: Arc<AppState>) {
     use varcavia_crawler::spider::{SemanticSpider, crawl_topic};
     use std::sync::atomic::Ordering;
 
-    let spider = SemanticSpider::new();
-    tracing::info!("Semantic Spider started with {} seeds", varcavia_crawler::spider::INITIAL_SEEDS.len());
+    let spider = SemanticSpider::with_db(&state.db);
+    tracing::info!("Semantic Spider started (queue: {})", spider.queue_size().await);
 
     let mut cycle = 0u64;
     loop {
@@ -439,6 +447,8 @@ async fn run_semantic_spider(state: Arc<AppState>) {
                 spider.stats.contradictions_found.load(Ordering::Relaxed),
                 spider.queue_size().await,
             );
+            // Flush queue to sled for persistence across restarts
+            spider.flush_queue(&state.db).await;
         }
 
         // Rate limit: 1 second between topics
